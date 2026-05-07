@@ -21,7 +21,7 @@ import java.util.Optional;
  * provide: a unique (ticker, exchange) lock and atomic META + CONFIG + LOCK
  * write on register. Idempotent hard delete.
  */
-final class InMemoryInstrumentRepository implements InstrumentRepository {
+public final class InMemoryInstrumentRepository implements InstrumentRepository {
 
     private final Map<String, Instrument> byId = new LinkedHashMap<>();
     private final Map<String, String> locksByTickerKey = new HashMap<>();
@@ -106,15 +106,15 @@ final class InMemoryInstrumentRepository implements InstrumentRepository {
         }
     }
 
-    boolean hasLock(String ticker, String exchange) {
+    public boolean hasLock(String ticker, String exchange) {
         return locksByTickerKey.containsKey(lockKey(ticker, exchange));
     }
 
-    boolean hasConfig(String instrumentId) {
+    public boolean hasConfig(String instrumentId) {
         return configByInstrumentId.getOrDefault(instrumentId, Boolean.FALSE);
     }
 
-    int size() {
+    public int size() {
         return byId.size();
     }
 
