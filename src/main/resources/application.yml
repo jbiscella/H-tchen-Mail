@@ -1,0 +1,50 @@
+micronaut:
+  application:
+    name: heikin-monitor
+  server:
+    enabled: false
+
+# Application configuration. Defaults here are overridden at runtime by SSM
+# Parameter Store values fetched at startup (see CLAUDE.md §14).
+monitoring:
+  market-data:
+    provider: yahoo
+    yahoo:
+      timeout-seconds: 10
+      max-rps: 1
+  bootstrap:
+    size-1d: 250
+    size-1w: 260
+  exchanges:
+    supported: NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS
+    suffix-map: '{"MIL":".MI","XETRA":".DE","LSE":".L","TSX":".TO","PAR":".PA","AMS":".AS"}'
+  ingest:
+    circuit-breaker:
+      threshold: 3
+    failure-rate-alert: 0.5
+  bedrock:
+    model-id: anthropic.claude-haiku-4-5-20251001-v1:0
+    region: eu-central-1
+    max-tokens: 1500
+    max-tool-iterations: 8
+    tool-timeout-seconds: 5
+  chart:
+    lookback-bars: 30
+    width-px: 900
+    height-px: 500
+    show-volume: false
+  email:
+    subject-prefix: "[HA Alert]"
+    charset: UTF-8
+  ses:
+    region: eu-south-1
+  alerts:
+    audit-enabled: false
+  retry:
+    max-attempts: 3
+    delay-seconds: 3600
+    poller-interval-minutes: 15
+  dynamodb:
+    table-name: monitoring
+    gsi1-name: gsi_status
+    gsi2-name: gsi_retry_due
