@@ -100,3 +100,6 @@ jacoco.exec
 
 # Micronaut local cache
 .micronaut/
+
+# jqwik failure-replay DB
+.jqwik-database
