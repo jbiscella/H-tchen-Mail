@@ -42,14 +42,16 @@
         <logstash.encoder.version>8.0</logstash.encoder.version>
 
         <junit.version>5.11.4</junit.version>
+        <junit.platform.version>1.11.4</junit.platform.version>
         <mockito.version>5.14.2</mockito.version>
         <assertj.version>3.26.3</assertj.version>
         <jqwik.version>1.9.2</jqwik.version>
+        <cucumber.version>7.20.1</cucumber.version>
         <testcontainers.version>1.20.4</testcontainers.version>
         <localstack.version>1.20.4</localstack.version>
 
-        <jacoco.version>0.8.12</jacoco.version>
-        <spotless.version>2.43.0</spotless.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <spotless.version>3.4.0</spotless.version>
     </properties>
 
     <dependencyManagement>
@@ -226,6 +228,32 @@
             <version>${localstack.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Cucumber: executes the CLAUDE.md Gherkin scenarios as acceptance tests. -->
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-java</artifactId>
+            <version>${cucumber.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-junit-platform-engine</artifactId>
+            <version>${cucumber.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.cucumber</groupId>
+            <artifactId>cucumber-picocontainer</artifactId>
+            <version>${cucumber.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite</artifactId>
+            <version>${junit.platform.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -237,7 +265,7 @@
                     <release>${release.version}</release>
                     <compilerArgs>
                         <arg>-Werror</arg>
-                        <arg>-Xlint:all,-processing</arg>
+                        <arg>-Xlint:all,-processing,-serial</arg>
                     </compilerArgs>
                     <annotationProcessorPaths combine.children="append">
                         <path>
@@ -296,6 +324,18 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <configuration>
+                    <!--
+                        Coverage gate scope per CLAUDE.md §11. Infrastructure
+                        and orchestration layers are excluded for now; they'll
+                        be folded back in once LocalStack-backed integration
+                        tests (Block 3+) and handler tests (Block 7) land.
+                    -->
+                    <excludes>
+                        <exclude>com/heikinashi/monitoring/infrastructure/**</exclude>
+                        <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <execution>
                         <id>prepare-agent</id>
@@ -324,12 +364,12 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.85</minimum>
+                                            <minimum>0.90</minimum>
                                         </limit>
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.75</minimum>
+                                            <minimum>0.80</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
