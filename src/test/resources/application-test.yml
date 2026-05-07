@@ -1,0 +1,12 @@
+micronaut:
+  application:
+    name: heikin-monitor-test
+  server:
+    enabled: false
+
+# Test profile overrides. Real adapters (Yahoo, Bedrock, SES, DynamoDB) are
+# replaced via @MockBean / @Replaces or pointed at LocalStack in
+# integration tests.
+monitoring:
+  dynamodb:
+    table-name: monitoring-test

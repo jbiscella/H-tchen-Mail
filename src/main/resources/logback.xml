@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>trace_id</includeMdcKeyName>
+            <includeMdcKeyName>run</includeMdcKeyName>
+            <includeMdcKeyName>instrument_id</includeMdcKeyName>
+            <includeMdcKeyName>timeframe</includeMdcKeyName>
+            <includeMdcKeyName>bar_time</includeMdcKeyName>
+            <includeMdcKeyName>code</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <root level="${LOG_LEVEL:-INFO}">
+        <appender-ref ref="JSON"/>
+    </root>
+
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="io.micronaut" level="INFO"/>
+
+</configuration>
