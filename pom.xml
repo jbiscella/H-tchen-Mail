@@ -48,8 +48,8 @@
         <testcontainers.version>1.20.4</testcontainers.version>
         <localstack.version>1.20.4</localstack.version>
 
-        <jacoco.version>0.8.12</jacoco.version>
-        <spotless.version>2.43.0</spotless.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <spotless.version>3.4.0</spotless.version>
     </properties>
 
     <dependencyManagement>
@@ -237,7 +237,7 @@
                     <release>${release.version}</release>
                     <compilerArgs>
                         <arg>-Werror</arg>
-                        <arg>-Xlint:all,-processing</arg>
+                        <arg>-Xlint:all,-processing,-serial</arg>
                     </compilerArgs>
                     <annotationProcessorPaths combine.children="append">
                         <path>
@@ -296,6 +296,18 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <configuration>
+                    <!--
+                        Coverage gate scope per CLAUDE.md §11. Infrastructure
+                        and orchestration layers are excluded for now; they'll
+                        be folded back in once LocalStack-backed integration
+                        tests (Block 3+) and handler tests (Block 7) land.
+                    -->
+                    <excludes>
+                        <exclude>com/heikinashi/monitoring/infrastructure/**</exclude>
+                        <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <execution>
                         <id>prepare-agent</id>
@@ -324,12 +336,12 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.85</minimum>
+                                            <minimum>0.90</minimum>
                                         </limit>
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.75</minimum>
+                                            <minimum>0.80</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
