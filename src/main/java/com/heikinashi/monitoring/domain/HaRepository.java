@@ -11,6 +11,13 @@ public interface HaRepository {
     Optional<HABar> findLatestBefore(String instrumentId, Timeframe tf, Instant before);
 
     /**
+     * Up to {@code n} most-recent HA bars with {@code barTime < before}, in
+     * ascending bar_time order. Used by the pattern detector to pre-fetch the
+     * streak-history window in a single Query (CLAUDE.md §8).
+     */
+    List<HABar> findLastNBefore(String instrumentId, Timeframe tf, Instant before, int n);
+
+    /**
      * Put (overwrite). Same OHLC → same HA, so writing again is a no-op
      * functionally. Optional epoch-seconds TTL.
      */
