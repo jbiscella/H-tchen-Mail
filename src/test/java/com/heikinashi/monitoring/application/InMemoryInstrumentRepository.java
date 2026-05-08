@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.application;
 
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.InstrumentStatus;
 import com.heikinashi.monitoring.domain.Page;
@@ -19,16 +20,16 @@ import java.util.Optional;
 /**
  * Test fake. Models the same atomicity guarantees the DynamoDB adapter must
  * provide: a unique (ticker, exchange) lock and atomic META + CONFIG + LOCK
- * write on register. Idempotent hard delete.
+ * write on register. Idempotent hard delete. Last-write-wins config update.
  */
 public final class InMemoryInstrumentRepository implements InstrumentRepository {
 
     private final Map<String, Instrument> byId = new LinkedHashMap<>();
     private final Map<String, String> locksByTickerKey = new HashMap<>();
-    private final Map<String, Boolean> configByInstrumentId = new HashMap<>();
+    private final Map<String, InstrumentConfig> configById = new HashMap<>();
 
     @Override
-    public void register(Instrument instrument) {
+    public void register(Instrument instrument, InstrumentConfig defaultConfig) {
         String lockKey = lockKey(instrument.ticker(), instrument.exchange());
         if (locksByTickerKey.containsKey(lockKey)) {
             throw new DuplicateInstrumentException(instrument.ticker(), instrument.exchange());
@@ -38,7 +39,7 @@ public final class InMemoryInstrumentRepository implements InstrumentRepository 
         }
         locksByTickerKey.put(lockKey, instrument.id());
         byId.put(instrument.id(), instrument);
-        configByInstrumentId.put(instrument.id(), Boolean.TRUE);
+        configById.put(instrument.id(), defaultConfig);
     }
 
     @Override
@@ -100,10 +101,23 @@ public final class InMemoryInstrumentRepository implements InstrumentRepository 
     @Override
     public void hardDelete(String id) {
         Instrument existing = byId.remove(id);
-        configByInstrumentId.remove(id);
+        configById.remove(id);
         if (existing != null) {
             locksByTickerKey.remove(lockKey(existing.ticker(), existing.exchange()));
         }
+    }
+
+    @Override
+    public Optional<InstrumentConfig> findConfigById(String id) {
+        return Optional.ofNullable(configById.get(id));
+    }
+
+    @Override
+    public void updateConfig(String id, InstrumentConfig updated) {
+        if (!byId.containsKey(id)) {
+            throw new InstrumentNotFoundException(id);
+        }
+        configById.put(id, updated);
     }
 
     public boolean hasLock(String ticker, String exchange) {
@@ -111,7 +125,7 @@ public final class InMemoryInstrumentRepository implements InstrumentRepository 
     }
 
     public boolean hasConfig(String instrumentId) {
-        return configByInstrumentId.getOrDefault(instrumentId, Boolean.FALSE);
+        return configById.containsKey(instrumentId);
     }
 
     public int size() {
