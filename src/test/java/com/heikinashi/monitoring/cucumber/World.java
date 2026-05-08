@@ -1,8 +1,10 @@
 package com.heikinashi.monitoring.cucumber;
 
 import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
+import com.heikinashi.monitoring.application.InstrumentConfigService;
 import com.heikinashi.monitoring.application.InstrumentRegistry;
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.Page;
 import com.heikinashi.monitoring.domain.UuidGenerator;
 import java.time.Clock;
@@ -26,10 +28,12 @@ public final class World {
     private final SequencedUuidGenerator uuids = new SequencedUuidGenerator();
     private Instant now = Instant.parse("2026-05-07T22:00:00Z");
     private InstrumentRegistry registry;
+    private InstrumentConfigService configService;
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
     private Page<Instrument> lastPage;
+    private InstrumentConfig lastConfig;
     private Throwable lastException;
 
     public InMemoryInstrumentRepository repository() {
@@ -44,7 +48,24 @@ public final class World {
     }
 
     public void configureExchanges(Set<String> supported) {
-        registry = new InstrumentRegistry(repository, Clock.fixed(now, ZoneOffset.UTC), uuids, supported);
+        Clock clock = Clock.fixed(now, ZoneOffset.UTC);
+        registry = new InstrumentRegistry(repository, clock, uuids, supported);
+        configService = new InstrumentConfigService(repository, clock);
+    }
+
+    public InstrumentConfigService configService() {
+        if (configService == null) {
+            throw new IllegalStateException("configService not initialised; call configureExchanges first");
+        }
+        return configService;
+    }
+
+    public InstrumentConfig lastConfig() {
+        return lastConfig;
+    }
+
+    public void setLastConfig(InstrumentConfig lastConfig) {
+        this.lastConfig = lastConfig;
     }
 
     public Instant now() {
