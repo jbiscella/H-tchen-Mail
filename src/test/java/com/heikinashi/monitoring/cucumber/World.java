@@ -9,6 +9,7 @@ import com.heikinashi.monitoring.application.IngestionConfig;
 import com.heikinashi.monitoring.application.IngestionService;
 import com.heikinashi.monitoring.application.InstrumentConfigService;
 import com.heikinashi.monitoring.application.InstrumentRegistry;
+import com.heikinashi.monitoring.application.PatternDetectionService;
 import com.heikinashi.monitoring.domain.IngestionSummary;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
@@ -42,6 +43,7 @@ public final class World {
     private InstrumentConfigService configService;
     private IngestionService ingestionService;
     private HeikinAshiService heikinAshiService;
+    private PatternDetectionService patternDetectionService;
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
@@ -90,6 +92,14 @@ public final class World {
                         "AMS", ".AS"));
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
         heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
+        patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
+    }
+
+    public PatternDetectionService patternDetectionService() {
+        if (patternDetectionService == null) {
+            throw new IllegalStateException("patternDetectionService not initialised; call configureExchanges first");
+        }
+        return patternDetectionService;
     }
 
     public HeikinAshiService heikinAshiService() {
