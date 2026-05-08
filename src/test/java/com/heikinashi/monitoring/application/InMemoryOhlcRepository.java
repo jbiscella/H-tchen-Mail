@@ -28,6 +28,17 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
     }
 
     @Override
+    public List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from) {
+        TreeMap<Instant, OHLCBar> bars = byKey.get(key(instrumentId, tf));
+        if (bars == null || bars.isEmpty()) {
+            return List.of();
+        }
+        List<OHLCBar> out = new ArrayList<>(bars.tailMap(from, true).values());
+        out.sort(Comparator.comparing(OHLCBar::barTime));
+        return out;
+    }
+
+    @Override
     public boolean putBar(OHLCBar bar, Optional<Long> ttl) {
         TreeMap<Instant, OHLCBar> bars =
                 byKey.computeIfAbsent(key(bar.instrumentId(), bar.timeframe()), k -> new TreeMap<>());
@@ -63,6 +74,22 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
 
     public Optional<Long> ttlFor(OHLCBar bar) {
         return Optional.ofNullable(ttlByKey.get(itemKey(bar)));
+    }
+
+    /**
+     * Test-only helper. Wipes all bars for {@code (instrumentId, tf)} and
+     * reinserts the given list, used by scenarios that simulate retroactive
+     * OHLC overwrites (CLAUDE.md §7).
+     */
+    public void deleteAllAndReinsert(String instrumentId, Timeframe tf, List<OHLCBar> bars) {
+        TreeMap<Instant, OHLCBar> existing = byKey.computeIfAbsent(key(instrumentId, tf), k -> new TreeMap<>());
+        for (OHLCBar b : new ArrayList<>(existing.values())) {
+            ttlByKey.remove(itemKey(b));
+        }
+        existing.clear();
+        for (OHLCBar b : bars) {
+            existing.put(b.barTime(), b);
+        }
     }
 
     public int totalBars() {
