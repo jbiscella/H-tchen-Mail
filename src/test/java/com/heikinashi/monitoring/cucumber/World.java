@@ -1,11 +1,17 @@
 package com.heikinashi.monitoring.cucumber;
 
 import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
+import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
+import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
+import com.heikinashi.monitoring.application.IngestionConfig;
+import com.heikinashi.monitoring.application.IngestionService;
 import com.heikinashi.monitoring.application.InstrumentConfigService;
 import com.heikinashi.monitoring.application.InstrumentRegistry;
+import com.heikinashi.monitoring.domain.IngestionSummary;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.Page;
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
 import java.time.Clock;
 import java.time.Instant;
@@ -25,19 +31,31 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class World {
 
     private final InMemoryInstrumentRepository repository = new InMemoryInstrumentRepository();
+    private final InMemoryOhlcRepository ohlcRepository = new InMemoryOhlcRepository();
+    private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
     private final SequencedUuidGenerator uuids = new SequencedUuidGenerator();
     private Instant now = Instant.parse("2026-05-07T22:00:00Z");
     private InstrumentRegistry registry;
     private InstrumentConfigService configService;
+    private IngestionService ingestionService;
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
     private Page<Instrument> lastPage;
     private InstrumentConfig lastConfig;
+    private IngestionSummary lastIngestionSummary;
     private Throwable lastException;
 
     public InMemoryInstrumentRepository repository() {
         return repository;
+    }
+
+    public InMemoryOhlcRepository ohlcRepository() {
+        return ohlcRepository;
+    }
+
+    public InMemoryMarketDataProvider marketData() {
+        return marketData;
     }
 
     public InstrumentRegistry registry() {
@@ -51,6 +69,18 @@ public final class World {
         Clock clock = Clock.fixed(now, ZoneOffset.UTC);
         registry = new InstrumentRegistry(repository, clock, uuids, supported);
         configService = new InstrumentConfigService(repository, clock);
+        IngestionConfig ingCfg = new IngestionConfig(
+                3,
+                0.5,
+                Map.of(Timeframe.D1, 250, Timeframe.W1, 260),
+                Map.of(
+                        "MIL", ".MI",
+                        "XETRA", ".DE",
+                        "LSE", ".L",
+                        "TSX", ".TO",
+                        "PAR", ".PA",
+                        "AMS", ".AS"));
+        ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
     }
 
     public InstrumentConfigService configService() {
@@ -60,12 +90,27 @@ public final class World {
         return configService;
     }
 
+    public IngestionService ingestionService() {
+        if (ingestionService == null) {
+            throw new IllegalStateException("ingestionService not initialised; call configureExchanges first");
+        }
+        return ingestionService;
+    }
+
     public InstrumentConfig lastConfig() {
         return lastConfig;
     }
 
     public void setLastConfig(InstrumentConfig lastConfig) {
         this.lastConfig = lastConfig;
+    }
+
+    public IngestionSummary lastIngestionSummary() {
+        return lastIngestionSummary;
+    }
+
+    public void setLastIngestionSummary(IngestionSummary lastIngestionSummary) {
+        this.lastIngestionSummary = lastIngestionSummary;
     }
 
     public Instant now() {
