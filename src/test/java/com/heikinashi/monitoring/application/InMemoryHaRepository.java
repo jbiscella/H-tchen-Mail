@@ -28,6 +28,17 @@ public final class InMemoryHaRepository implements HaRepository {
     }
 
     @Override
+    public List<HABar> findLastNBefore(String instrumentId, Timeframe tf, Instant before, int n) {
+        TreeMap<Instant, HABar> bars = byKey.get(key(instrumentId, tf));
+        if (bars == null || bars.isEmpty() || n <= 0) {
+            return List.of();
+        }
+        List<HABar> headView = new ArrayList<>(bars.headMap(before, false).values());
+        int from = Math.max(0, headView.size() - n);
+        return new ArrayList<>(headView.subList(from, headView.size()));
+    }
+
+    @Override
     public void putBar(HABar bar, Optional<Long> ttl) {
         TreeMap<Instant, HABar> bars =
                 byKey.computeIfAbsent(key(bar.instrumentId(), bar.timeframe()), k -> new TreeMap<>());
