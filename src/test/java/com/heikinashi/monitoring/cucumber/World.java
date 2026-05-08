@@ -1,5 +1,7 @@
 package com.heikinashi.monitoring.cucumber;
 
+import com.heikinashi.monitoring.application.HeikinAshiService;
+import com.heikinashi.monitoring.application.InMemoryHaRepository;
 import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
@@ -32,12 +34,14 @@ public final class World {
 
     private final InMemoryInstrumentRepository repository = new InMemoryInstrumentRepository();
     private final InMemoryOhlcRepository ohlcRepository = new InMemoryOhlcRepository();
+    private final InMemoryHaRepository haRepository = new InMemoryHaRepository();
     private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
     private final SequencedUuidGenerator uuids = new SequencedUuidGenerator();
     private Instant now = Instant.parse("2026-05-07T22:00:00Z");
     private InstrumentRegistry registry;
     private InstrumentConfigService configService;
     private IngestionService ingestionService;
+    private HeikinAshiService heikinAshiService;
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
@@ -52,6 +56,10 @@ public final class World {
 
     public InMemoryOhlcRepository ohlcRepository() {
         return ohlcRepository;
+    }
+
+    public InMemoryHaRepository haRepository() {
+        return haRepository;
     }
 
     public InMemoryMarketDataProvider marketData() {
@@ -81,6 +89,14 @@ public final class World {
                         "PAR", ".PA",
                         "AMS", ".AS"));
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
+        heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
+    }
+
+    public HeikinAshiService heikinAshiService() {
+        if (heikinAshiService == null) {
+            throw new IllegalStateException("heikinAshiService not initialised; call configureExchanges first");
+        }
+        return heikinAshiService;
     }
 
     public InstrumentConfigService configService() {
