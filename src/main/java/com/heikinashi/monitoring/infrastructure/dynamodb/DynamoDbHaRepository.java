@@ -1,7 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.dynamodb;
 
-import com.heikinashi.monitoring.domain.OHLCBar;
-import com.heikinashi.monitoring.domain.OhlcRepository;
+import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.Timeframe;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
@@ -14,7 +14,6 @@ import java.util.Optional;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
 import software.amazon.awssdk.services.dynamodb.model.BatchWriteItemRequest;
-import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException;
 import software.amazon.awssdk.services.dynamodb.model.Delete;
 import software.amazon.awssdk.services.dynamodb.model.DeleteRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
@@ -26,15 +25,14 @@ import software.amazon.awssdk.services.dynamodb.model.TransactWriteItemsRequest;
 import software.amazon.awssdk.services.dynamodb.model.WriteRequest;
 
 /**
- * DynamoDB single-table adapter for {@link OhlcRepository}.
+ * DynamoDB single-table adapter for {@link HaRepository}. Items live under
+ * {@code pk = INSTRUMENT#<id>}, {@code sk = HA#<tf>#<bar_time_iso>}.
  *
- * <p>Items live under {@code pk = INSTRUMENT#<id>}, {@code sk = OHLC#<tf>#<bar_time_iso>}.
- * Idempotent put uses {@code attribute_not_exists(pk)}. SNAPSHOT_ONLY truncate-and-put
- * uses a TransactWriteItems when ≤ 24 existing bars, falling back to a non-atomic
- * batched delete + put for larger sets (CLAUDE.md §6 trade-off).
+ * <p>Per CLAUDE.md §7 idempotency is by overwrite (no condition); same OHLC
+ * produces same HA so re-writing is a no-op functionally.
  */
 @Singleton
-public class DynamoDbOhlcRepository implements OhlcRepository {
+public class DynamoDbHaRepository implements HaRepository {
 
     private static final int TXN_MAX = 25;
     private static final int BATCH_DELETE_CHUNK = 25;
@@ -42,43 +40,20 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
     private final DynamoDbClient client;
     private final DynamoTableConfig tableConfig;
 
-    public DynamoDbOhlcRepository(DynamoDbClient client, DynamoTableConfig tableConfig) {
+    public DynamoDbHaRepository(DynamoDbClient client, DynamoTableConfig tableConfig) {
         this.client = client;
         this.tableConfig = tableConfig;
     }
 
     @Override
-    public List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from) {
-        List<OHLCBar> out = new ArrayList<>();
-        Map<String, AttributeValue> startKey = null;
-        do {
-            QueryRequest.Builder q = QueryRequest.builder()
-                    .tableName(tableConfig.getTableName())
-                    .keyConditionExpression("pk = :pk AND sk BETWEEN :skLow AND :skHigh")
-                    .expressionAttributeValues(Map.of(
-                            ":pk", s(Keys.instrumentPk(instrumentId)),
-                            ":skLow", s("OHLC#" + tf.wire() + "#" + from.toString()),
-                            ":skHigh", s("OHLC#" + tf.wire() + "#~")));
-            if (startKey != null) {
-                q.exclusiveStartKey(startKey);
-            }
-            QueryResponse resp = client.query(q.build());
-            for (Map<String, AttributeValue> item : resp.items()) {
-                out.add(toBar(item));
-            }
-            startKey = resp.hasLastEvaluatedKey() ? resp.lastEvaluatedKey() : null;
-        } while (startKey != null);
-        return out;
-    }
-
-    @Override
-    public Optional<OHLCBar> findLatest(String instrumentId, Timeframe tf) {
+    public Optional<HABar> findLatestBefore(String instrumentId, Timeframe tf, Instant before) {
         QueryResponse resp = client.query(QueryRequest.builder()
                 .tableName(tableConfig.getTableName())
-                .keyConditionExpression("pk = :pk AND begins_with(sk, :sk)")
+                .keyConditionExpression("pk = :pk AND sk BETWEEN :skLow AND :skHigh")
                 .expressionAttributeValues(Map.of(
                         ":pk", s(Keys.instrumentPk(instrumentId)),
-                        ":sk", s("OHLC#" + tf.wire() + "#")))
+                        ":skLow", s("HA#" + tf.wire() + "#"),
+                        ":skHigh", s("HA#" + tf.wire() + "#" + before.toString())))
                 .scanIndexForward(false)
                 .limit(1)
                 .build());
@@ -89,26 +64,19 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
     }
 
     @Override
-    public boolean putBar(OHLCBar bar, Optional<Long> ttl) {
-        Map<String, AttributeValue> item = buildItem(bar, ttl);
-        try {
-            client.putItem(PutItemRequest.builder()
-                    .tableName(tableConfig.getTableName())
-                    .item(item)
-                    .conditionExpression("attribute_not_exists(pk)")
-                    .build());
-            return true;
-        } catch (ConditionalCheckFailedException e) {
-            return false;
-        }
+    public void putBar(HABar bar, Optional<Long> ttl) {
+        client.putItem(PutItemRequest.builder()
+                .tableName(tableConfig.getTableName())
+                .item(buildItem(bar, ttl))
+                .build());
     }
 
     @Override
-    public void snapshotReplace(String instrumentId, Timeframe tf, OHLCBar newBar, Optional<Long> ttl) {
-        List<OHLCBar> existing = listAll(instrumentId, tf);
+    public void snapshotReplace(String instrumentId, Timeframe tf, HABar newBar, Optional<Long> ttl) {
+        List<HABar> existing = listAll(instrumentId, tf);
         if (existing.size() < TXN_MAX) {
             List<TransactWriteItem> ops = new ArrayList<>(existing.size() + 1);
-            for (OHLCBar e : existing) {
+            for (HABar e : existing) {
                 ops.add(TransactWriteItem.builder()
                         .delete(Delete.builder()
                                 .tableName(tableConfig.getTableName())
@@ -134,8 +102,8 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
     }
 
     @Override
-    public List<OHLCBar> listAll(String instrumentId, Timeframe tf) {
-        List<OHLCBar> out = new ArrayList<>();
+    public List<HABar> listAll(String instrumentId, Timeframe tf) {
+        List<HABar> out = new ArrayList<>();
         Map<String, AttributeValue> startKey = null;
         do {
             QueryRequest.Builder q = QueryRequest.builder()
@@ -143,7 +111,7 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
                     .keyConditionExpression("pk = :pk AND begins_with(sk, :sk)")
                     .expressionAttributeValues(Map.of(
                             ":pk", s(Keys.instrumentPk(instrumentId)),
-                            ":sk", s("OHLC#" + tf.wire() + "#")));
+                            ":sk", s("HA#" + tf.wire() + "#")));
             if (startKey != null) {
                 q.exclusiveStartKey(startKey);
             }
@@ -156,7 +124,12 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
         return out;
     }
 
-    private void batchDelete(List<OHLCBar> bars) {
+    @Override
+    public void deleteAll(String instrumentId, Timeframe tf) {
+        batchDelete(listAll(instrumentId, tf));
+    }
+
+    private void batchDelete(List<HABar> bars) {
         for (int i = 0; i < bars.size(); i += BATCH_DELETE_CHUNK) {
             List<WriteRequest> chunk = new ArrayList<>();
             for (int j = i; j < Math.min(i + BATCH_DELETE_CHUNK, bars.size()); j++) {
@@ -171,43 +144,39 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
         }
     }
 
-    private Map<String, AttributeValue> keyFor(OHLCBar b) {
+    private Map<String, AttributeValue> keyFor(HABar b) {
         return Map.of(
                 "pk", s(Keys.instrumentPk(b.instrumentId())),
-                "sk", s("OHLC#" + b.timeframe().wire() + "#" + b.barTime().toString()));
+                "sk", s("HA#" + b.timeframe().wire() + "#" + b.barTime().toString()));
     }
 
-    private Map<String, AttributeValue> buildItem(OHLCBar b, Optional<Long> ttl) {
+    private Map<String, AttributeValue> buildItem(HABar b, Optional<Long> ttl) {
         Map<String, AttributeValue> item = new HashMap<>();
         item.put("pk", s(Keys.instrumentPk(b.instrumentId())));
-        item.put("sk", s("OHLC#" + b.timeframe().wire() + "#" + b.barTime().toString()));
-        item.put("entity", s("OHLC"));
+        item.put("sk", s("HA#" + b.timeframe().wire() + "#" + b.barTime().toString()));
+        item.put("entity", s("HA"));
         item.put("instrument_id", s(b.instrumentId()));
         item.put("timeframe", s(b.timeframe().wire()));
         item.put("bar_time", s(b.barTime().toString()));
-        item.put("open", n(b.open().toPlainString()));
-        item.put("high", n(b.high().toPlainString()));
-        item.put("low", n(b.low().toPlainString()));
-        item.put("close", n(b.close().toPlainString()));
-        b.volume().ifPresent(v -> item.put("volume", n(v.toPlainString())));
-        item.put("source", s(b.source()));
-        item.put("ingested_at", s(b.ingestedAt().toString()));
+        item.put("ha_open", n(b.haOpen().toPlainString()));
+        item.put("ha_high", n(b.haHigh().toPlainString()));
+        item.put("ha_low", n(b.haLow().toPlainString()));
+        item.put("ha_close", n(b.haClose().toPlainString()));
+        item.put("computed_at", s(b.computedAt().toString()));
         ttl.ifPresent(t -> item.put("ttl", n(Long.toString(t))));
         return item;
     }
 
-    private OHLCBar toBar(Map<String, AttributeValue> item) {
-        return new OHLCBar(
+    private HABar toBar(Map<String, AttributeValue> item) {
+        return new HABar(
                 item.get("instrument_id").s(),
                 Timeframe.fromWire(item.get("timeframe").s()),
                 Instant.parse(item.get("bar_time").s()),
-                new BigDecimal(item.get("open").n()),
-                new BigDecimal(item.get("high").n()),
-                new BigDecimal(item.get("low").n()),
-                new BigDecimal(item.get("close").n()),
-                Optional.ofNullable(item.get("volume")).map(av -> new BigDecimal(av.n())),
-                item.get("source").s(),
-                Instant.parse(item.get("ingested_at").s()));
+                new BigDecimal(item.get("ha_open").n()),
+                new BigDecimal(item.get("ha_high").n()),
+                new BigDecimal(item.get("ha_low").n()),
+                new BigDecimal(item.get("ha_close").n()),
+                Instant.parse(item.get("computed_at").s()));
     }
 
     private static AttributeValue s(String v) {

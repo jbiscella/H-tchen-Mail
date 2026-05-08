@@ -1,16 +1,20 @@
 package com.heikinashi.monitoring.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Persistence port for OHLC bars (CLAUDE.md §6). Implementations live in
+ * Persistence port for OHLC bars (CLAUDE.md §6 / §7). Implementations live in
  * {@code infrastructure}.
  */
 public interface OhlcRepository {
 
     /** Most recent bar for {@code (instrumentId, tf)} by {@code bar_time}, or empty. */
     Optional<OHLCBar> findLatest(String instrumentId, Timeframe tf);
+
+    /** All OHLC bars at-or-after {@code from}, sorted ascending by bar_time. Used by HA recompute. */
+    List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from);
 
     /**
      * Idempotent put: writes the bar with a conditional non-existence check on
