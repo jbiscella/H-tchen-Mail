@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.application;
 
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.InstrumentStatus;
 import com.heikinashi.monitoring.domain.Page;
@@ -46,7 +47,7 @@ public class InstrumentRegistry {
         Instant now = clock.instant();
         Instrument instrument = new Instrument(
                 uuids.newUuid().toString(), ticker, exchange, name, currency, InstrumentStatus.ACTIVE, now, now);
-        repository.register(instrument);
+        repository.register(instrument, InstrumentConfig.defaults(now));
         return instrument;
     }
 
