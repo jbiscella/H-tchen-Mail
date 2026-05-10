@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.email;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -16,6 +17,8 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
+import com.heikinashi.monitoring.domain.error.DependencyUnavailableException;
+import com.heikinashi.monitoring.domain.error.SESConfigurationException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -153,6 +156,103 @@ class SesEmailSenderTest {
         String raw = new String(captor.getValue().content().raw().data().asByteArray(), StandardCharsets.UTF_8);
         assertThat(raw).contains("multipart");
         assertThat(raw).contains("To: alice@example.com");
+    }
+
+    @Test
+    void throttling_exception_classified_as_transient_DependencyUnavailable() {
+        SesV2Client client = Mockito.mock(SesV2Client.class);
+        when(client.sendEmail(any(SendEmailRequest.class)))
+                .thenThrow(SesV2Exception.builder()
+                        .awsErrorDetails(AwsErrorDetails.builder()
+                                .errorCode("ThrottlingException")
+                                .errorMessage("Rate exceeded")
+                                .build())
+                        .message("Rate exceeded")
+                        .statusCode(400)
+                        .build());
+
+        SesEmailSender sender = new SesEmailSender(client, defaultConfig());
+
+        assertThatThrownBy(() -> sender.sendFull(EVENT, CHART, ANALYSIS, orderedSet("alice@example.com")))
+                .isInstanceOf(DependencyUnavailableException.class)
+                .hasMessageContaining("ses");
+    }
+
+    @Test
+    void server_5xx_classified_as_transient_DependencyUnavailable() {
+        SesV2Client client = Mockito.mock(SesV2Client.class);
+        when(client.sendEmail(any(SendEmailRequest.class)))
+                .thenThrow(SesV2Exception.builder()
+                        .awsErrorDetails(AwsErrorDetails.builder()
+                                .errorCode("InternalServerError")
+                                .errorMessage("oops")
+                                .build())
+                        .message("oops")
+                        .statusCode(503)
+                        .build());
+
+        SesEmailSender sender = new SesEmailSender(client, defaultConfig());
+
+        assertThatThrownBy(() -> sender.sendFull(EVENT, CHART, ANALYSIS, orderedSet("alice@example.com")))
+                .isInstanceOf(DependencyUnavailableException.class);
+    }
+
+    @Test
+    void access_denied_classified_as_SESConfigurationException() {
+        SesV2Client client = Mockito.mock(SesV2Client.class);
+        when(client.sendEmail(any(SendEmailRequest.class)))
+                .thenThrow(SesV2Exception.builder()
+                        .awsErrorDetails(AwsErrorDetails.builder()
+                                .errorCode("AccessDeniedException")
+                                .errorMessage("not authorized")
+                                .build())
+                        .message("not authorized")
+                        .statusCode(403)
+                        .build());
+
+        SesEmailSender sender = new SesEmailSender(client, defaultConfig());
+
+        assertThatThrownBy(() -> sender.sendFull(EVENT, CHART, ANALYSIS, orderedSet("alice@example.com")))
+                .isInstanceOf(SESConfigurationException.class)
+                .hasMessageContaining("AccessDeniedException");
+    }
+
+    @Test
+    void account_sending_paused_classified_as_SESConfigurationException() {
+        SesV2Client client = Mockito.mock(SesV2Client.class);
+        when(client.sendEmail(any(SendEmailRequest.class)))
+                .thenThrow(SesV2Exception.builder()
+                        .awsErrorDetails(AwsErrorDetails.builder()
+                                .errorCode("AccountSendingPausedException")
+                                .errorMessage("account paused")
+                                .build())
+                        .message("account paused")
+                        .statusCode(400)
+                        .build());
+
+        SesEmailSender sender = new SesEmailSender(client, defaultConfig());
+
+        assertThatThrownBy(() -> sender.sendFull(EVENT, CHART, ANALYSIS, orderedSet("alice@example.com")))
+                .isInstanceOf(SESConfigurationException.class);
+    }
+
+    @Test
+    void mailfrom_not_verified_classified_as_SESConfigurationException() {
+        SesV2Client client = Mockito.mock(SesV2Client.class);
+        when(client.sendEmail(any(SendEmailRequest.class)))
+                .thenThrow(SesV2Exception.builder()
+                        .awsErrorDetails(AwsErrorDetails.builder()
+                                .errorCode("MailFromDomainNotVerifiedException")
+                                .errorMessage("sender not verified")
+                                .build())
+                        .message("sender not verified")
+                        .statusCode(400)
+                        .build());
+
+        SesEmailSender sender = new SesEmailSender(client, defaultConfig());
+
+        assertThatThrownBy(() -> sender.sendFull(EVENT, CHART, ANALYSIS, orderedSet("alice@example.com")))
+                .isInstanceOf(SESConfigurationException.class);
     }
 
     private static EmailConfig defaultConfig() {

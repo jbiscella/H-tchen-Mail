@@ -5,7 +5,9 @@ import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.EmailSender;
 import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.error.DependencyUnavailableException;
 import com.heikinashi.monitoring.domain.error.EmailCompositionException;
+import com.heikinashi.monitoring.domain.error.SESConfigurationException;
 import jakarta.inject.Singleton;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
@@ -109,14 +111,78 @@ public class SesEmailSender implements EmailSender {
                     .build());
             return new DeliveryResult(recipient, true, Optional.ofNullable(resp.messageId()), Optional.empty());
         } catch (SesV2Exception e) {
+            String code = errorCode(e);
             LOG.warn(
                     "ses_send_failed instrument_id={} recipient_masked={} code={} message={}",
                     event.instrumentId(),
                     mask(recipient),
-                    e.awsErrorDetails() == null ? "" : e.awsErrorDetails().errorCode(),
+                    code,
                     e.getMessage());
-            return new DeliveryResult(recipient, false, Optional.empty(), Optional.of(errorCode(e)));
+            return classify(code, recipient, e);
         }
+    }
+
+    /**
+     * Maps SES error codes to the right disposition:
+     *
+     * <ul>
+     *   <li>recipient-level reject ({@code MessageRejected}, {@code MailFromDomainNotVerified},
+     *       address-format issues) → return a failed {@link DeliveryResult} so the dispatch
+     *       service can skip this recipient and continue with the others.
+     *   <li>transient AWS errors ({@code ThrottlingException}, {@code TooManyRequestsException},
+     *       {@code ServiceUnavailableException}, retryable 5xx) → throw
+     *       {@link DependencyUnavailableException} so the caller queues a retry.
+     *   <li>account-wide config errors ({@code AccountSendingPausedException},
+     *       {@code SendingPausedException}, {@code AccessDeniedException}, anything containing
+     *       "NotAuthorized") → throw {@link SESConfigurationException} so the Lambda surfaces
+     *       to the DLQ; retrying in-run will never help.
+     *   <li>anything else → log + recipient-level failure (current fallback).
+     * </ul>
+     */
+    private static DeliveryResult classify(String code, String recipient, SesV2Exception cause) {
+        if (code == null) {
+            return new DeliveryResult(recipient, false, Optional.empty(), Optional.of("UNKNOWN"));
+        }
+        if (isTransient(cause, code)) {
+            throw new DependencyUnavailableException("ses", cause);
+        }
+        if (isConfigError(code)) {
+            throw new SESConfigurationException(code, cause);
+        }
+        return new DeliveryResult(recipient, false, Optional.empty(), Optional.of(code));
+    }
+
+    private static boolean isTransient(SesV2Exception e, String code) {
+        if (e.retryable()) {
+            return true;
+        }
+        int status = e.statusCode();
+        if (status >= 500 && status < 600) {
+            return true;
+        }
+        return switch (code) {
+            case "ThrottlingException",
+                    "TooManyRequestsException",
+                    "Throttling",
+                    "ServiceUnavailableException",
+                    "ServiceUnavailable",
+                    "InternalFailure" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean isConfigError(String code) {
+        return switch (code) {
+            case "AccountSendingPausedException",
+                    "SendingPausedException",
+                    "AccessDeniedException",
+                    "AccessDenied",
+                    "AccountSuspended",
+                    "MailFromDomainNotVerifiedException",
+                    "NotAuthorized",
+                    "UnauthorizedOperation" -> true;
+            default -> false;
+        };
     }
 
     private byte[] composeRaw(
