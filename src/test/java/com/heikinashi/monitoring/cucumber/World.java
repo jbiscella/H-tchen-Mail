@@ -13,6 +13,7 @@ import com.heikinashi.monitoring.application.IngestionConfig;
 import com.heikinashi.monitoring.application.IngestionService;
 import com.heikinashi.monitoring.application.InstrumentConfigService;
 import com.heikinashi.monitoring.application.InstrumentRegistry;
+import com.heikinashi.monitoring.application.MonitoringRunService;
 import com.heikinashi.monitoring.application.PatternDetectionService;
 import com.heikinashi.monitoring.application.RetryPollerService;
 import com.heikinashi.monitoring.application.ScriptedAiAnalyst;
@@ -21,6 +22,7 @@ import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.IngestionSummary;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
+import com.heikinashi.monitoring.domain.MainSummary;
 import com.heikinashi.monitoring.domain.Page;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PollResult;
@@ -65,7 +67,9 @@ public final class World {
     private PatternDetectionService patternDetectionService;
     private AlertDispatchService alertDispatchService;
     private RetryPollerService retryPollerService;
+    private MonitoringRunService monitoringRunService;
     private boolean auditEnabled;
+    private Duration mainSoftTimeout = Duration.ofMinutes(13);
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
@@ -74,6 +78,7 @@ public final class World {
     private IngestionSummary lastIngestionSummary;
     private DispatchSummary lastDispatchSummary;
     private PollResult lastPollResult;
+    private MainSummary lastMainSummary;
     private Throwable lastException;
 
     public InMemoryInstrumentRepository repository() {
@@ -141,6 +146,33 @@ public final class World {
                 maxAttempts,
                 100,
                 auditEnabled);
+        monitoringRunService = new MonitoringRunService(
+                repository,
+                ingestionService,
+                heikinAshiService,
+                patternDetectionService,
+                alertDispatchService,
+                clock,
+                mainSoftTimeout);
+    }
+
+    public MonitoringRunService monitoringRunService() {
+        if (monitoringRunService == null) {
+            throw new IllegalStateException("monitoringRunService not initialised; call configureExchanges first");
+        }
+        return monitoringRunService;
+    }
+
+    public MainSummary lastMainSummary() {
+        return lastMainSummary;
+    }
+
+    public void setLastMainSummary(MainSummary lastMainSummary) {
+        this.lastMainSummary = lastMainSummary;
+    }
+
+    public void setMainSoftTimeout(Duration softTimeout) {
+        this.mainSoftTimeout = softTimeout;
     }
 
     public InMemoryPendingAlertRepository pendingAlerts() {
