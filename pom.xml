@@ -52,6 +52,7 @@
 
         <jacoco.version>0.8.14</jacoco.version>
         <spotless.version>3.4.0</spotless.version>
+        <license.plugin.version>2.4.0</license.plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -398,6 +399,36 @@
                         <phase>verify</phase>
                         <goals>
                             <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!--
+                Regenerates THIRD_PARTY_LICENSES.txt during `mvn verify`,
+                covering every direct and transitive dependency across all
+                scopes (so reviewers can audit test-time deps too, not just
+                what ships in the Lambda jar). The plugin's CLI scope flags
+                quietly drop test scope; binding via <executions> with
+                explicit <includedScopes> works correctly.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <version>${license.plugin.version}</version>
+                <configuration>
+                    <outputDirectory>${project.basedir}</outputDirectory>
+                    <thirdPartyFilename>THIRD_PARTY_LICENSES.txt</thirdPartyFilename>
+                    <sortArtifactByName>true</sortArtifactByName>
+                    <useMissingFile>false</useMissingFile>
+                    <includedScopes>compile,runtime,provided,test</includedScopes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>add-third-party</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>add-third-party</goal>
                         </goals>
                     </execution>
                 </executions>
