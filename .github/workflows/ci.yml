@@ -9,12 +9,26 @@ on:
 
 permissions:
   contents: read
+  id-token: write       # OIDC federation to AWS
+  pull-requests: write  # terraform-plan PR comment
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || 'monitoring-tfstate' }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE || 'monitoring-tflock' }}
+  ARTIFACTS_BUCKET: ${{ vars.ARTIFACTS_BUCKET || 'monitoring-artifacts' }}
+  DEPLOY_ROLE_ARN: ${{ vars.DEPLOY_ROLE_ARN }}
+  TF_VERSION: '1.15.2'
+  LAMBDA_MAIN_NAME: ${{ vars.LAMBDA_MAIN_NAME || 'monitoring-main' }}
+  LAMBDA_RETRY_NAME: ${{ vars.LAMBDA_RETRY_NAME || 'retry-poller' }}
+
 jobs:
+  # --- Build + tests --------------------------------------------------------
+
   verify:
     name: mvn verify
     runs-on: ubuntu-latest
@@ -57,3 +71,232 @@ jobs:
           path: target/site/jacoco/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Upload deployable jar
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-jar
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+  # --- Terraform: fmt + validate (always) -----------------------------------
+
+  terraform-validate:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt -check (recursive)
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate (bootstrap)
+        working-directory: terraform/bootstrap
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: terraform validate (main)
+        working-directory: terraform/main
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # --- Terraform plan on PRs (commented on the PR) --------------------------
+
+  terraform-plan:
+    name: terraform plan (main stack)
+    if: github.event_name == 'pull_request' && vars.DEPLOY_ROLE_ARN != ''
+    needs: [verify, terraform-validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init (main)
+        working-directory: terraform/main
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=${{ env.TF_LOCK_TABLE }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: terraform plan
+        id: plan
+        working-directory: terraform/main
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -lock-timeout=5m \
+            | tee plan.txt
+          {
+            echo 'plan<<TFEOF'
+            cat plan.txt
+            echo 'TFEOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const plan = `${{ steps.plan.outputs.plan }}`;
+            const truncated = plan.length > 60000
+              ? plan.slice(0, 60000) + '\n\n…(truncated)'
+              : plan;
+            const body = [
+              '### Terraform plan (`terraform/main`)',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```hcl',
+              truncated,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+  # --- Terraform apply on push to main --------------------------------------
+
+  terraform-apply:
+    name: terraform apply (main stack)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
+    needs: [verify, terraform-validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init
+        working-directory: terraform/main
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=${{ env.TF_LOCK_TABLE }}" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: terraform apply
+        working-directory: terraform/main
+        run: terraform apply -auto-approve -input=false -lock-timeout=5m
+
+  # --- Lambda deploy: jar → S3 → update-function-code → publish → alias -----
+
+  deploy-lambda:
+    name: deploy lambda (jar → S3 → alias)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
+    needs: [terraform-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download deployable jar
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-jar
+          path: target/
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve jar + S3 key
+        id: jar
+        run: |
+          # Prefer the shaded uber-jar (Micronaut application package). Fall
+          # back to whatever single jar is in target/ — fail loud if zero.
+          shopt -s nullglob
+          jars=( target/*-shaded.jar )
+          if [[ ${#jars[@]} -eq 0 ]]; then
+            jars=( target/*.jar )
+          fi
+          if [[ ${#jars[@]} -eq 0 ]]; then
+            echo "::error::No jar in target/"
+            exit 1
+          fi
+          jar="${jars[0]}"
+          key="lambda/${GITHUB_SHA}/$(basename "$jar")"
+          echo "jar=$jar" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Upload jar to S3
+        run: |
+          aws s3 cp "${{ steps.jar.outputs.jar }}" \
+            "s3://${{ env.ARTIFACTS_BUCKET }}/${{ steps.jar.outputs.key }}"
+
+      - name: Update + publish + alias both Lambdas
+        run: |
+          set -euo pipefail
+          deploy_one() {
+            local fn="$1"
+            echo "::group::deploy $fn"
+
+            aws lambda update-function-code \
+              --function-name "$fn" \
+              --s3-bucket "${{ env.ARTIFACTS_BUCKET }}" \
+              --s3-key   "${{ steps.jar.outputs.key }}" \
+              --publish false \
+              --no-cli-pager
+
+            # Wait for the in-place update to settle before publishing —
+            # otherwise publish-version sometimes 409s on "Update in progress".
+            aws lambda wait function-updated --function-name "$fn"
+
+            local version
+            version=$(aws lambda publish-version \
+              --function-name "$fn" \
+              --description "deploy ${GITHUB_SHA}" \
+              --query Version --output text \
+              --no-cli-pager)
+            echo "Published $fn version $version"
+
+            aws lambda update-alias \
+              --function-name "$fn" \
+              --name live \
+              --function-version "$version" \
+              --no-cli-pager
+            echo "::endgroup::"
+          }
+
+          deploy_one "${{ env.LAMBDA_MAIN_NAME }}"
+          deploy_one "${{ env.LAMBDA_RETRY_NAME }}"
