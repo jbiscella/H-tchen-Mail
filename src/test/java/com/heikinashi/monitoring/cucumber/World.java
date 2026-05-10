@@ -18,6 +18,9 @@ import com.heikinashi.monitoring.application.PatternDetectionService;
 import com.heikinashi.monitoring.application.RetryPollerService;
 import com.heikinashi.monitoring.application.ScriptedAiAnalyst;
 import com.heikinashi.monitoring.application.ScriptedChartRenderer;
+import com.heikinashi.monitoring.application.config.AlertsConfig;
+import com.heikinashi.monitoring.application.config.RetryConfig;
+import com.heikinashi.monitoring.application.config.RunConfig;
 import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.IngestionSummary;
 import com.heikinashi.monitoring.domain.Instrument;
@@ -122,8 +125,14 @@ public final class World {
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
         heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
         patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
-        Duration retryDelay = Duration.ofHours(1);
-        int maxAttempts = 3;
+        RetryConfig retryConfig = new RetryConfig();
+        retryConfig.setMaxAttempts(3);
+        retryConfig.setDelaySeconds((int) Duration.ofHours(1).toSeconds());
+        retryConfig.setBatchLimit(100);
+        AlertsConfig alertsConfig = new AlertsConfig();
+        alertsConfig.setAuditEnabled(auditEnabled);
+        RunConfig runConfig = new RunConfig();
+        runConfig.setSoftTimeoutSeconds((int) mainSoftTimeout.toSeconds());
         alertDispatchService = new AlertDispatchService(
                 repository,
                 chartRenderer,
@@ -132,8 +141,8 @@ public final class World {
                 pendingAlerts,
                 auditRepo,
                 clock,
-                retryDelay,
-                auditEnabled);
+                retryConfig,
+                alertsConfig);
         retryPollerService = new RetryPollerService(
                 repository,
                 chartRenderer,
@@ -142,10 +151,8 @@ public final class World {
                 pendingAlerts,
                 auditRepo,
                 clock,
-                retryDelay,
-                maxAttempts,
-                100,
-                auditEnabled);
+                retryConfig,
+                alertsConfig);
         monitoringRunService = new MonitoringRunService(
                 repository,
                 ingestionService,
@@ -153,7 +160,7 @@ public final class World {
                 patternDetectionService,
                 alertDispatchService,
                 clock,
-                mainSoftTimeout);
+                runConfig);
     }
 
     public MonitoringRunService monitoringRunService() {

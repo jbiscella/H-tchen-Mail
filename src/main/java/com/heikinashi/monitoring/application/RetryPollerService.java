@@ -1,5 +1,7 @@
 package com.heikinashi.monitoring.application;
 
+import com.heikinashi.monitoring.application.config.AlertsConfig;
+import com.heikinashi.monitoring.application.config.RetryConfig;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiAnalyst;
 import com.heikinashi.monitoring.domain.AlertAuditRepository;
@@ -63,10 +65,8 @@ public class RetryPollerService {
             PendingAlertRepository pendingAlerts,
             AlertAuditRepository auditRepo,
             Clock clock,
-            Duration retryDelay,
-            int maxAttempts,
-            int batchLimit,
-            boolean auditEnabled) {
+            RetryConfig retryConfig,
+            AlertsConfig alertsConfig) {
         this.instruments = instruments;
         this.chartRenderer = chartRenderer;
         this.aiAnalyst = aiAnalyst;
@@ -74,10 +74,10 @@ public class RetryPollerService {
         this.pendingAlerts = pendingAlerts;
         this.auditRepo = auditRepo;
         this.clock = clock;
-        this.retryDelay = retryDelay;
-        this.maxAttempts = maxAttempts;
-        this.batchLimit = batchLimit;
-        this.auditEnabled = auditEnabled;
+        this.retryDelay = retryConfig.delay();
+        this.maxAttempts = retryConfig.getMaxAttempts();
+        this.batchLimit = retryConfig.getBatchLimit();
+        this.auditEnabled = alertsConfig.isAuditEnabled();
     }
 
     public PollResult processBatch() {

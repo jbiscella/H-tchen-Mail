@@ -10,3 +10,5 @@ micronaut:
 monitoring:
   dynamodb:
     table-name: monitoring-test
+  email:
+    sender-email: alerts@test.local

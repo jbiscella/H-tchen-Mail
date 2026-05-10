@@ -13,7 +13,7 @@ public class EmailConfig {
     private String charset = "UTF-8";
 
     @NotBlank
-    private String senderEmail = "alerts@example.com";
+    private String senderEmail;
 
     private String replyTo = "";
 
