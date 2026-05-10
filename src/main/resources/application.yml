@@ -4,8 +4,8 @@ micronaut:
   server:
     enabled: false
 
-# Application configuration. Defaults here are overridden at runtime by SSM
-# Parameter Store values fetched at startup (see CLAUDE.md §14).
+# Application configuration. Defaults here are overridden per-deploy by the
+# Lambda function's environment.variables block (terraform/main/lambda.tf).
 monitoring:
   market-data:
     provider: yahoo

@@ -10,6 +10,9 @@ public class BedrockConfig {
     @NotBlank
     private String modelId = "anthropic.claude-haiku-4-5-20251001-v1:0";
 
+    @NotBlank
+    private String region = "eu-central-1";
+
     @Min(1)
     private int maxTokens = 1500;
 
@@ -25,6 +28,14 @@ public class BedrockConfig {
 
     public void setModelId(String modelId) {
         this.modelId = modelId;
+    }
+
+    public String getRegion() {
+        return region;
+    }
+
+    public void setRegion(String region) {
+        this.region = region;
     }
 
     public int getMaxTokens() {

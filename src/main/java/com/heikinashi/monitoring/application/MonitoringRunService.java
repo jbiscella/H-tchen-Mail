@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.application;
 
+import com.heikinashi.monitoring.application.config.RunConfig;
 import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.Instrument;
@@ -54,14 +55,14 @@ public class MonitoringRunService {
             PatternDetectionService detectionService,
             AlertDispatchService dispatchService,
             Clock clock,
-            Duration softTimeout) {
+            RunConfig runConfig) {
         this.instruments = instruments;
         this.ingestionService = ingestionService;
         this.heikinAshiService = heikinAshiService;
         this.detectionService = detectionService;
         this.dispatchService = dispatchService;
         this.clock = clock;
-        this.softTimeout = softTimeout;
+        this.softTimeout = runConfig.softTimeout();
     }
 
     public MainSummary execute(MainInput input) {

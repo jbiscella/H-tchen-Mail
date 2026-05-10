@@ -6,6 +6,8 @@ import com.heikinashi.monitoring.application.InstrumentRegistry;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
+import com.heikinashi.monitoring.infrastructure.bedrock.BedrockConfig;
+import com.heikinashi.monitoring.infrastructure.email.SesConfig;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
@@ -16,6 +18,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
+import software.amazon.awssdk.services.sesv2.SesV2Client;
 
 @Factory
 public class AppFactory {
@@ -23,6 +29,27 @@ public class AppFactory {
     @Singleton
     public Clock clock() {
         return Clock.systemUTC();
+    }
+
+    // ----- AWS SDK clients ---------------------------------------------------
+    // Compute / data-plane services run in aws.region (eu-central-1 default).
+    // SES lives in its own region per CLAUDE.md §1 ADR.
+
+    @Singleton
+    public DynamoDbClient dynamoDbClient(AwsRegionConfig aws) {
+        return DynamoDbClient.builder().region(Region.of(aws.getRegion())).build();
+    }
+
+    @Singleton
+    public BedrockRuntimeClient bedrockRuntimeClient(BedrockConfig bedrock) {
+        return BedrockRuntimeClient.builder()
+                .region(Region.of(bedrock.getRegion()))
+                .build();
+    }
+
+    @Singleton
+    public SesV2Client sesV2Client(SesConfig ses) {
+        return SesV2Client.builder().region(Region.of(ses.getRegion())).build();
     }
 
     @Singleton
