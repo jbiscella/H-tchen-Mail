@@ -77,8 +77,12 @@ public class IngestionService {
                 continue;
             }
             try {
-                int inserted = ingestInstrument(inst);
-                summary = summary.plusSucceeded().plusInserted(inserted);
+                Map<Timeframe, List<OHLCBar>> inserted = ingestInstrument(inst);
+                int barCount = 0;
+                for (List<OHLCBar> tfBars : inserted.values()) {
+                    barCount += tfBars.size();
+                }
+                summary = summary.plusSucceeded().plusInserted(barCount);
                 consecutiveFailures.put(tickerKey, 0);
             } catch (CircuitOpenException e) {
                 summary = summary.plusFailed();
@@ -101,18 +105,23 @@ public class IngestionService {
         return summary.withDuration(clock.millis() - t0);
     }
 
-    public int ingestInstrument(Instrument inst) {
+    /**
+     * Ingest every tracked timeframe for {@code inst} and return the freshly
+     * inserted bars by timeframe. The caller (Block 7 orchestrator) feeds
+     * those into HA computation and pattern detection.
+     */
+    public Map<Timeframe, List<OHLCBar>> ingestInstrument(Instrument inst) {
         InstrumentConfig cfg =
                 instruments.findConfigById(inst.id()).orElseThrow(() -> new InstrumentNotFoundException(inst.id()));
 
-        int totalInserted = 0;
+        Map<Timeframe, List<OHLCBar>> insertedByTf = new HashMap<>();
         for (Timeframe tf : cfg.trackedTimeframes()) {
-            totalInserted += ingestTimeframe(inst, tf, cfg);
+            insertedByTf.put(tf, ingestTimeframe(inst, tf, cfg));
         }
-        return totalInserted;
+        return insertedByTf;
     }
 
-    public int ingestTimeframe(Instrument inst, Timeframe tf, InstrumentConfig cfg) {
+    public List<OHLCBar> ingestTimeframe(Instrument inst, Timeframe tf, InstrumentConfig cfg) {
         String symbol = config.yahooSymbol(inst.ticker(), inst.exchange());
         Optional<OHLCBar> latest = ohlc.findLatest(inst.id(), tf);
 
@@ -141,16 +150,16 @@ public class IngestionService {
         }
         bars.sort(Comparator.comparing(OHLCBar::barTime));
 
-        int inserted = 0;
+        List<OHLCBar> inserted = new ArrayList<>();
         if (cfg.storagePolicy() == StoragePolicy.SNAPSHOT_ONLY) {
             for (OHLCBar bar : bars) {
                 ohlc.snapshotReplace(inst.id(), tf, bar, StoragePolicies.computeTtl(cfg, bar.barTime(), tf));
-                inserted++;
+                inserted.add(bar);
             }
         } else {
             for (OHLCBar bar : bars) {
                 if (ohlc.putBar(bar, StoragePolicies.computeTtl(cfg, bar.barTime(), tf))) {
-                    inserted++;
+                    inserted.add(bar);
                 }
             }
         }
