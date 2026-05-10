@@ -39,6 +39,18 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
     }
 
     @Override
+    public List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from, Instant toInclusive) {
+        TreeMap<Instant, OHLCBar> bars = byKey.get(key(instrumentId, tf));
+        if (bars == null || bars.isEmpty()) {
+            return List.of();
+        }
+        List<OHLCBar> out =
+                new ArrayList<>(bars.subMap(from, true, toInclusive, true).values());
+        out.sort(Comparator.comparing(OHLCBar::barTime));
+        return out;
+    }
+
+    @Override
     public boolean putBar(OHLCBar bar, Optional<Long> ttl) {
         TreeMap<Instant, OHLCBar> bars =
                 byKey.computeIfAbsent(key(bar.instrumentId(), bar.timeframe()), k -> new TreeMap<>());

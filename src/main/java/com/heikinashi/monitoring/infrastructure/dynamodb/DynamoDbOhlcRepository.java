@@ -48,6 +48,15 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
 
     @Override
     public List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from) {
+        return findBetween(instrumentId, tf, from.toString(), "~");
+    }
+
+    @Override
+    public List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from, Instant toInclusive) {
+        return findBetween(instrumentId, tf, from.toString(), toInclusive.toString());
+    }
+
+    private List<OHLCBar> findBetween(String instrumentId, Timeframe tf, String fromIso, String toIso) {
         List<OHLCBar> out = new ArrayList<>();
         Map<String, AttributeValue> startKey = null;
         do {
@@ -56,8 +65,8 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
                     .keyConditionExpression("pk = :pk AND sk BETWEEN :skLow AND :skHigh")
                     .expressionAttributeValues(Map.of(
                             ":pk", s(Keys.instrumentPk(instrumentId)),
-                            ":skLow", s("OHLC#" + tf.wire() + "#" + from.toString()),
-                            ":skHigh", s("OHLC#" + tf.wire() + "#~")));
+                            ":skLow", s("OHLC#" + tf.wire() + "#" + fromIso),
+                            ":skHigh", s("OHLC#" + tf.wire() + "#" + toIso)));
             if (startKey != null) {
                 q.exclusiveStartKey(startKey);
             }
