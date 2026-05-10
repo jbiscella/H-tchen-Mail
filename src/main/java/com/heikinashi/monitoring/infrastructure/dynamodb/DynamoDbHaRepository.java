@@ -13,7 +13,6 @@ import java.util.Map;
 import java.util.Optional;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
-import software.amazon.awssdk.services.dynamodb.model.BatchWriteItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.Delete;
 import software.amazon.awssdk.services.dynamodb.model.DeleteRequest;
 import software.amazon.awssdk.services.dynamodb.model.Put;
@@ -171,9 +170,7 @@ public class DynamoDbHaRepository implements HaRepository {
                                 DeleteRequest.builder().key(keyFor(bars.get(j))).build())
                         .build());
             }
-            client.batchWriteItem(BatchWriteItemRequest.builder()
-                    .requestItems(Map.of(tableConfig.getTableName(), chunk))
-                    .build());
+            BatchWriteRetry.execute(client, tableConfig.getTableName(), chunk);
         }
     }
 
