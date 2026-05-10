@@ -82,6 +82,7 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+terraform/main/files/*.zip
 
 # AWS / SAM
 .aws-sam/
