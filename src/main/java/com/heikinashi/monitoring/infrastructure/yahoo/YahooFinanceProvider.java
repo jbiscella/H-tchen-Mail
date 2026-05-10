@@ -8,6 +8,7 @@ import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.error.TickerNotFoundException;
 import jakarta.inject.Singleton;
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -32,6 +33,12 @@ public class YahooFinanceProvider implements MarketDataProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private static final String PROVIDER = "yahoo";
+
+    private final Clock clock;
+
+    public YahooFinanceProvider(Clock clock) {
+        this.clock = clock;
+    }
 
     @Override
     public List<OHLCBar> fetchHistory(String symbol, Timeframe tf, Instant since) {
@@ -60,7 +67,7 @@ public class YahooFinanceProvider implements MarketDataProvider {
             throw new SchemaDriftException("yahoo.history", "null history list for symbol " + symbol);
         }
 
-        Instant ingestedAt = Instant.now();
+        Instant ingestedAt = clock.instant();
         List<OHLCBar> out = new ArrayList<>(rawHistory.size());
         for (HistoricalQuote q : rawHistory) {
             try {
