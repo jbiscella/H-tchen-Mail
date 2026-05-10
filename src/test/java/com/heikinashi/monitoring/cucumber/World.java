@@ -1,25 +1,38 @@
 package com.heikinashi.monitoring.cucumber;
 
+import com.heikinashi.monitoring.application.AlertDispatchService;
+import com.heikinashi.monitoring.application.CapturingAlertAuditRepository;
+import com.heikinashi.monitoring.application.CapturingEmailSender;
 import com.heikinashi.monitoring.application.HeikinAshiService;
 import com.heikinashi.monitoring.application.InMemoryHaRepository;
 import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
+import com.heikinashi.monitoring.application.InMemoryPendingAlertRepository;
 import com.heikinashi.monitoring.application.IngestionConfig;
 import com.heikinashi.monitoring.application.IngestionService;
 import com.heikinashi.monitoring.application.InstrumentConfigService;
 import com.heikinashi.monitoring.application.InstrumentRegistry;
 import com.heikinashi.monitoring.application.PatternDetectionService;
+import com.heikinashi.monitoring.application.RetryPollerService;
+import com.heikinashi.monitoring.application.ScriptedAiAnalyst;
+import com.heikinashi.monitoring.application.ScriptedChartRenderer;
+import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.IngestionSummary;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.Page;
+import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -37,6 +50,12 @@ public final class World {
     private final InMemoryOhlcRepository ohlcRepository = new InMemoryOhlcRepository();
     private final InMemoryHaRepository haRepository = new InMemoryHaRepository();
     private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
+    private final InMemoryPendingAlertRepository pendingAlerts = new InMemoryPendingAlertRepository();
+    private final ScriptedChartRenderer chartRenderer = new ScriptedChartRenderer();
+    private final ScriptedAiAnalyst aiAnalyst = new ScriptedAiAnalyst();
+    private final CapturingEmailSender emailSender = new CapturingEmailSender();
+    private final CapturingAlertAuditRepository auditRepo = new CapturingAlertAuditRepository();
+    private final List<PatternEvent> stagedEvents = new ArrayList<>();
     private final SequencedUuidGenerator uuids = new SequencedUuidGenerator();
     private Instant now = Instant.parse("2026-05-07T22:00:00Z");
     private InstrumentRegistry registry;
@@ -44,12 +63,17 @@ public final class World {
     private IngestionService ingestionService;
     private HeikinAshiService heikinAshiService;
     private PatternDetectionService patternDetectionService;
+    private AlertDispatchService alertDispatchService;
+    private RetryPollerService retryPollerService;
+    private boolean auditEnabled;
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
     private Instrument lastInstrument;
     private Page<Instrument> lastPage;
     private InstrumentConfig lastConfig;
     private IngestionSummary lastIngestionSummary;
+    private DispatchSummary lastDispatchSummary;
+    private PollResult lastPollResult;
     private Throwable lastException;
 
     public InMemoryInstrumentRepository repository() {
@@ -93,6 +117,92 @@ public final class World {
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
         heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
         patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
+        Duration retryDelay = Duration.ofHours(1);
+        int maxAttempts = 3;
+        alertDispatchService = new AlertDispatchService(
+                repository,
+                chartRenderer,
+                aiAnalyst,
+                emailSender,
+                pendingAlerts,
+                auditRepo,
+                clock,
+                retryDelay,
+                auditEnabled);
+        retryPollerService = new RetryPollerService(
+                repository,
+                chartRenderer,
+                aiAnalyst,
+                emailSender,
+                pendingAlerts,
+                auditRepo,
+                clock,
+                retryDelay,
+                maxAttempts,
+                100,
+                auditEnabled);
+    }
+
+    public InMemoryPendingAlertRepository pendingAlerts() {
+        return pendingAlerts;
+    }
+
+    public ScriptedChartRenderer chartRenderer() {
+        return chartRenderer;
+    }
+
+    public ScriptedAiAnalyst aiAnalyst() {
+        return aiAnalyst;
+    }
+
+    public CapturingEmailSender emailSender() {
+        return emailSender;
+    }
+
+    public CapturingAlertAuditRepository auditRepo() {
+        return auditRepo;
+    }
+
+    public AlertDispatchService alertDispatchService() {
+        if (alertDispatchService == null) {
+            throw new IllegalStateException("alertDispatchService not initialised; call configureExchanges first");
+        }
+        return alertDispatchService;
+    }
+
+    public RetryPollerService retryPollerService() {
+        if (retryPollerService == null) {
+            throw new IllegalStateException("retryPollerService not initialised; call configureExchanges first");
+        }
+        return retryPollerService;
+    }
+
+    public List<PatternEvent> stagedEvents() {
+        return stagedEvents;
+    }
+
+    public DispatchSummary lastDispatchSummary() {
+        return lastDispatchSummary;
+    }
+
+    public void setLastDispatchSummary(DispatchSummary lastDispatchSummary) {
+        this.lastDispatchSummary = lastDispatchSummary;
+    }
+
+    public PollResult lastPollResult() {
+        return lastPollResult;
+    }
+
+    public void setLastPollResult(PollResult lastPollResult) {
+        this.lastPollResult = lastPollResult;
+    }
+
+    public boolean auditEnabled() {
+        return auditEnabled;
+    }
+
+    public void enableAudit() {
+        this.auditEnabled = true;
     }
 
     public PatternDetectionService patternDetectionService() {
