@@ -1,15 +1,20 @@
 package com.heikinashi.monitoring.domain;
 
+import com.heikinashi.monitoring.domain.fundamentals.AnalystRating;
+import com.heikinashi.monitoring.domain.fundamentals.EarningsCalendar;
+import com.heikinashi.monitoring.domain.fundamentals.InsiderTransaction;
+import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
+import com.heikinashi.monitoring.domain.fundamentals.QuarterFigures;
+import com.heikinashi.monitoring.domain.fundamentals.QuoteInfo;
 import java.time.Instant;
 import java.util.List;
 
 /**
- * External market-data port (CLAUDE.md §6). Implementations live in
- * {@code infrastructure}.
- *
- * <p>Other methods (quote info, earnings, news, recommendations,
- * financials, insider transactions) listed in CLAUDE.md are best-effort
- * Block 6 dependencies and will be added when the AI tool surface lands.
+ * External market-data port (CLAUDE.md §6 / §9). Implementations live in
+ * {@code infrastructure}. Fundamentals queries (the non-history methods) are
+ * best-effort: implementations may return empty results when the underlying
+ * provider lacks the data, and the AI analyst tool layer treats empty results
+ * gracefully rather than failing the whole alert.
  *
  * <p>Implementations may raise:
  * <ul>
@@ -30,4 +35,28 @@ public interface MarketDataProvider {
      * responsible for normalization and closed-bar filtering.
      */
     List<OHLCBar> fetchHistory(String symbol, Timeframe tf, Instant since);
+
+    default QuoteInfo fetchQuoteInfo(String ticker, String exchange) {
+        return QuoteInfo.empty();
+    }
+
+    default EarningsCalendar fetchEarningsCalendar(String ticker, String exchange) {
+        return EarningsCalendar.empty();
+    }
+
+    default List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
+        return List.of();
+    }
+
+    default List<AnalystRating> fetchRecommendations(String ticker, String exchange) {
+        return List.of();
+    }
+
+    default List<QuarterFigures> fetchFinancialsSummary(String ticker, String exchange) {
+        return List.of();
+    }
+
+    default List<InsiderTransaction> fetchInsiderTransactions(String ticker, String exchange) {
+        return List.of();
+    }
 }
