@@ -17,6 +17,14 @@ public interface OhlcRepository {
     List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from);
 
     /**
+     * All OHLC bars in the inclusive closed interval {@code [from, toInclusive]},
+     * sorted ascending by bar_time. Lets pattern detection bound its read to the
+     * window of newly computed HA bars rather than scanning every bar at or
+     * after {@code from} (which under {@code FULL_HISTORY} is unbounded).
+     */
+    List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from, Instant toInclusive);
+
+    /**
      * Idempotent put: writes the bar with a conditional non-existence check on
      * the primary key. Returns {@code true} if the bar was inserted, {@code false}
      * if a bar with the same {@code (instrument_id, tf, bar_time)} already

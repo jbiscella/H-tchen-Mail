@@ -60,6 +60,24 @@ class DynamoDbOhlcRepositoryIT extends LocalStackITBase {
     }
 
     @Test
+    void findRange_bounded_returns_only_bars_within_the_closed_interval() {
+        repo.putBar(bar(Instant.parse("2026-05-03T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-04T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-05T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-06T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-07T00:00:00Z")), Optional.empty());
+
+        List<OHLCBar> range = repo.findRange(
+                INSTRUMENT_ID,
+                Timeframe.D1,
+                Instant.parse("2026-05-04T00:00:00Z"),
+                Instant.parse("2026-05-06T00:00:00Z"));
+        assertThat(range).hasSize(3);
+        assertThat(range.get(0).barTime()).isEqualTo(Instant.parse("2026-05-04T00:00:00Z"));
+        assertThat(range.get(2).barTime()).isEqualTo(Instant.parse("2026-05-06T00:00:00Z"));
+    }
+
+    @Test
     void snapshotReplace_truncates_existing_bars_and_writes_new_one_atomically() {
         for (int i = 0; i < 5; i++) {
             repo.putBar(bar(Instant.parse("2026-05-0" + (i + 1) + "T00:00:00Z")), Optional.empty());
