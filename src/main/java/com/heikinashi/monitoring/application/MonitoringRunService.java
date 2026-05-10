@@ -72,7 +72,6 @@ public class MonitoringRunService {
 
         List<Instrument> targets = resolveTargets(input);
         MainSummary summary = MainSummary.empty();
-        List<PatternEvent> queuedEvents = new ArrayList<>();
 
         for (Instrument inst : targets) {
             if (clock.millis() >= deadline) {
@@ -85,6 +84,7 @@ public class MonitoringRunService {
                 break;
             }
             summary = summary.plusProcessed();
+            List<PatternEvent> instrumentEvents = new ArrayList<>();
             try {
                 Map<Timeframe, List<OHLCBar>> insertedByTf = ingestionService.ingestInstrument(inst);
                 int barCount = 0;
@@ -96,7 +96,7 @@ public class MonitoringRunService {
                     if (entry.getValue().isEmpty()) continue;
                     List<HABar> haBars = heikinAshiService.computeFor(inst, entry.getKey(), entry.getValue());
                     List<PatternEvent> events = detectionService.detectPatterns(inst, entry.getKey(), haBars);
-                    queuedEvents.addAll(events);
+                    instrumentEvents.addAll(events);
                     summary = summary.addEvents(events.size());
                 }
                 summary = summary.plusSucceeded();
@@ -110,11 +110,16 @@ public class MonitoringRunService {
                         codeOf(e),
                         e.getMessage());
             }
-        }
 
-        if (!queuedEvents.isEmpty()) {
-            DispatchSummary dispatchSummary = dispatchService.dispatchAlerts(queuedEvents);
-            summary = summary.withDispatch(dispatchSummary);
+            // Dispatch this instrument's alerts now, while we're still in scope.
+            // Per-instrument dispatch keeps memory flat (no run-wide accumulator)
+            // and ensures the soft-timeout cuts cleanly: every successfully
+            // processed instrument has its alerts attempted before we ever
+            // consider abandoning the loop.
+            if (!instrumentEvents.isEmpty()) {
+                DispatchSummary dispatchSummary = dispatchService.dispatchAlerts(instrumentEvents);
+                summary = summary.withDispatch(dispatchSummary);
+            }
         }
 
         summary = summary.withDuration(clock.millis() - t0);
