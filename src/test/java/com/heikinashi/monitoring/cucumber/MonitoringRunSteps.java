@@ -86,6 +86,16 @@ public class MonitoringRunSteps {
         assertThat(world.lastMainSummary().softTimeoutHit()).isTrue();
     }
 
+    @Then("the main summary reports {int} alerts sent")
+    public void main_summary_alerts_sent(int n) {
+        assertThat(world.lastMainSummary().alertsSent()).isEqualTo(n);
+    }
+
+    @Then("the main summary reports {int} events detected")
+    public void main_summary_events_detected(int n) {
+        assertThat(world.lastMainSummary().eventsDetected()).isEqualTo(n);
+    }
+
     // -------- Helpers ---------------------------------------------------------
 
     private Set<String> parseTickers(String csv) {
