@@ -56,7 +56,7 @@ public class DynamoDbHaRepository implements HaRepository {
                 .expressionAttributeValues(Map.of(
                         ":pk", s(Keys.instrumentPk(instrumentId)),
                         ":skLow", s("HA#" + tf.wire() + "#"),
-                        ":skHigh", s("HA#" + tf.wire() + "#" + before.toString())))
+                        ":skHigh", s("HA#" + tf.wire() + "#" + exclusiveUpperIso(before))))
                 .scanIndexForward(false)
                 .limit(n)
                 .build());
@@ -76,7 +76,7 @@ public class DynamoDbHaRepository implements HaRepository {
                 .expressionAttributeValues(Map.of(
                         ":pk", s(Keys.instrumentPk(instrumentId)),
                         ":skLow", s("HA#" + tf.wire() + "#"),
-                        ":skHigh", s("HA#" + tf.wire() + "#" + before.toString())))
+                        ":skHigh", s("HA#" + tf.wire() + "#" + exclusiveUpperIso(before))))
                 .scanIndexForward(false)
                 .limit(1)
                 .build());
@@ -84,6 +84,16 @@ public class DynamoDbHaRepository implements HaRepository {
             return Optional.empty();
         }
         return Optional.of(toBar(resp.items().get(0)));
+    }
+
+    /**
+     * DynamoDB's {@code BETWEEN} is inclusive on both bounds, but the
+     * {@code findLatestBefore} / {@code findLastNBefore} contract is strict
+     * less-than (mirroring {@link java.util.TreeMap#lowerEntry}). Encode the
+     * exclusive upper bound by subtracting one nanosecond.
+     */
+    private static String exclusiveUpperIso(Instant before) {
+        return before.minusNanos(1).toString();
     }
 
     @Override

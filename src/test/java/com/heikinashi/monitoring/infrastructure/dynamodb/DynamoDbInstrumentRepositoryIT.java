@@ -9,31 +9,12 @@ import com.heikinashi.monitoring.domain.InstrumentStatus;
 import com.heikinashi.monitoring.domain.Page;
 import com.heikinashi.monitoring.domain.error.DuplicateInstrumentException;
 import com.heikinashi.monitoring.domain.error.InstrumentNotFoundException;
-import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
-import org.testcontainers.containers.localstack.LocalStackContainer;
-import org.testcontainers.utility.DockerImageName;
-import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
-import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
-import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition;
-import software.amazon.awssdk.services.dynamodb.model.BillingMode;
-import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest;
-import software.amazon.awssdk.services.dynamodb.model.GlobalSecondaryIndex;
-import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement;
-import software.amazon.awssdk.services.dynamodb.model.KeyType;
-import software.amazon.awssdk.services.dynamodb.model.Projection;
-import software.amazon.awssdk.services.dynamodb.model.ProjectionType;
-import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
 
 /**
  * Integration test for {@link DynamoDbInstrumentRepository} backed by
@@ -43,126 +24,15 @@ import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType;
  * GSI1-based listing with cursor pagination, status updates that flip
  * gsi1Pk, and idempotent multi-step hard delete.
  */
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class DynamoDbInstrumentRepositoryIT {
+class DynamoDbInstrumentRepositoryIT extends LocalStackITBase {
 
-    private static final String TABLE = "monitoring-it";
-
-    private static LocalStackContainer localstack;
-    private static DynamoDbClient client;
-    private static DynamoDbInstrumentRepository repo;
-
-    @BeforeAll
-    void startLocalstack() {
-        localstack = new LocalStackContainer(DockerImageName.parse("localstack/localstack:3.7"))
-                .withServices(LocalStackContainer.Service.DYNAMODB);
-        localstack.start();
-
-        client = DynamoDbClient.builder()
-                .endpointOverride(URI.create(localstack.getEndpoint().toString()))
-                .credentialsProvider(StaticCredentialsProvider.create(
-                        AwsBasicCredentials.create(localstack.getAccessKey(), localstack.getSecretKey())))
-                .region(Region.of(localstack.getRegion()))
-                .build();
-
-        DynamoTableConfig tableConfig = new DynamoTableConfig();
-        tableConfig.setTableName(TABLE);
-        tableConfig.setGsi1Name("gsi_status");
-        tableConfig.setGsi2Name("gsi_retry_due");
-
-        createTable();
-        repo = new DynamoDbInstrumentRepository(client, tableConfig);
-    }
-
-    @AfterAll
-    void stopLocalstack() {
-        if (client != null) {
-            client.close();
-        }
-        if (localstack != null) {
-            localstack.stop();
-        }
-    }
+    private DynamoDbInstrumentRepository repo;
 
     @BeforeEach
-    void wipeTable() {
-        client.deleteTable(b -> b.tableName(TABLE));
-        createTable();
+    void setUp() {
+        wipeTable();
+        repo = new DynamoDbInstrumentRepository(CLIENT, TABLE_CONFIG);
     }
-
-    private static void createTable() {
-        client.createTable(CreateTableRequest.builder()
-                .tableName(TABLE)
-                .billingMode(BillingMode.PAY_PER_REQUEST)
-                .attributeDefinitions(
-                        AttributeDefinition.builder()
-                                .attributeName("pk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build(),
-                        AttributeDefinition.builder()
-                                .attributeName("sk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build(),
-                        AttributeDefinition.builder()
-                                .attributeName("gsi1Pk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build(),
-                        AttributeDefinition.builder()
-                                .attributeName("gsi1Sk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build(),
-                        AttributeDefinition.builder()
-                                .attributeName("gsi2Pk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build(),
-                        AttributeDefinition.builder()
-                                .attributeName("gsi2Sk")
-                                .attributeType(ScalarAttributeType.S)
-                                .build())
-                .keySchema(
-                        KeySchemaElement.builder()
-                                .attributeName("pk")
-                                .keyType(KeyType.HASH)
-                                .build(),
-                        KeySchemaElement.builder()
-                                .attributeName("sk")
-                                .keyType(KeyType.RANGE)
-                                .build())
-                .globalSecondaryIndexes(
-                        GlobalSecondaryIndex.builder()
-                                .indexName("gsi_status")
-                                .keySchema(
-                                        KeySchemaElement.builder()
-                                                .attributeName("gsi1Pk")
-                                                .keyType(KeyType.HASH)
-                                                .build(),
-                                        KeySchemaElement.builder()
-                                                .attributeName("gsi1Sk")
-                                                .keyType(KeyType.RANGE)
-                                                .build())
-                                .projection(Projection.builder()
-                                        .projectionType(ProjectionType.ALL)
-                                        .build())
-                                .build(),
-                        GlobalSecondaryIndex.builder()
-                                .indexName("gsi_retry_due")
-                                .keySchema(
-                                        KeySchemaElement.builder()
-                                                .attributeName("gsi2Pk")
-                                                .keyType(KeyType.HASH)
-                                                .build(),
-                                        KeySchemaElement.builder()
-                                                .attributeName("gsi2Sk")
-                                                .keyType(KeyType.RANGE)
-                                                .build())
-                                .projection(Projection.builder()
-                                        .projectionType(ProjectionType.ALL)
-                                        .build())
-                                .build())
-                .build());
-    }
-
-    // -------- contract tests -------------------------------------------------
 
     @Test
     void register_then_findById_round_trips_the_instrument() {
@@ -181,7 +51,6 @@ class DynamoDbInstrumentRepositoryIT {
         Instrument inst = sampleInstrument("AAPL", "NASDAQ");
         repo.register(inst, InstrumentConfig.defaults(inst.createdAt()));
 
-        // META + LOCK + CONFIG all readable.
         assertThat(repo.findById(inst.id())).isPresent();
         assertThat(repo.findConfigById(inst.id())).isPresent();
     }
@@ -247,7 +116,6 @@ class DynamoDbInstrumentRepositoryIT {
         assertThat(repo.findById(inst.id())).isEmpty();
         assertThat(repo.findConfigById(inst.id())).isEmpty();
 
-        // Lock released — re-registering the same (ticker, exchange) succeeds.
         Instrument reborn = sampleInstrument("AAPL", "NASDAQ");
         repo.register(reborn, InstrumentConfig.defaults(reborn.createdAt()));
         assertThat(repo.findById(reborn.id())).isPresent();
@@ -257,7 +125,6 @@ class DynamoDbInstrumentRepositoryIT {
     void hardDelete_is_idempotent_on_a_never_existed_id() {
         repo.hardDelete("never-existed");
         repo.hardDelete("never-existed");
-        // No assertion needed — idempotency means no exception.
     }
 
     @Test
@@ -265,8 +132,6 @@ class DynamoDbInstrumentRepositoryIT {
         InstrumentConfig cfg = InstrumentConfig.defaults(Instant.parse("2026-05-07T22:00:00Z"));
         assertThatThrownBy(() -> repo.updateConfig("missing-id", cfg)).isInstanceOf(InstrumentNotFoundException.class);
     }
-
-    // -------- helpers --------------------------------------------------------
 
     private static Instrument sampleInstrument(String ticker, String exchange) {
         Instant now = Instant.parse("2026-05-07T22:00:00Z");
