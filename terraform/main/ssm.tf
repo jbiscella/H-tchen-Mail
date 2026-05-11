@@ -1,12 +1,15 @@
 # --- SSM parameters --------------------------------------------------------
-# Non-secret config under /monitoring/* per CLAUDE.md §14. SecureString
-# values (currently just /monitoring/ses/sender-email) are populated
-# manually via aws ssm put-parameter — Terraform does not own their
-# value because a `terraform plan` diff would leak it.
+# Operational documentation of the project's tunables under /monitoring/*
+# per CLAUDE.md §14. **The Lambdas do NOT read these at startup** — runtime
+# config comes from application.yml + Lambda environment.variables (set in
+# lambda.tf). The SSM catalog stays here as:
 #
-# String parameters track defaults from §14. The Lambdas read these at
-# startup; changing a value here + redeploying (or restarting via alias
-# bump) propagates without code changes.
+#   1. a single console-browsable inventory operators can scan;
+#   2. a place to put the SecureString sender-email value (populated
+#      manually via aws ssm put-parameter — Terraform does not own that
+#      value because a `terraform plan` diff would leak it);
+#   3. a forward-compatible hook if we ever wire up
+#      micronaut-aws-parameter-store to overlay these at startup.
 
 locals {
   ssm_string_params = {
