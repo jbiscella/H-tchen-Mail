@@ -328,12 +328,19 @@
                 <configuration>
                     <!--
                         Coverage gate scope per CLAUDE.md §11. Infrastructure
-                        and orchestration layers are excluded for now; they'll
-                        be folded back in once LocalStack-backed integration
-                        tests (Block 3+) and handler tests (Block 7) land.
+                        adapters that talk to AWS (DynamoDB / Bedrock / SES / Yahoo)
+                        and orchestration handlers are exercised by LocalStack ITs
+                        (Failsafe) which JaCoCo's surefire-bound agent doesn't see;
+                        excluding them keeps the gate honest about what surefire
+                        actually covers. Wiring code (AppFactory + Config classes)
+                        is included — AppFactoryWiringTest provides coverage there.
                     -->
                     <excludes>
-                        <exclude>com/heikinashi/monitoring/infrastructure/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/dynamodb/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/bedrock/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/email/Ses*</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/yahoo/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/chart/**</exclude>
                         <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
                     </excludes>
                 </configuration>

@@ -25,9 +25,10 @@ import software.amazon.awssdk.services.bedrockruntime.model.ToolSpecification;
  * backed by a {@link MarketDataProvider} method and produces a JSON-shaped
  * {@link Document} for the {@code toolResult} content block.
  *
- * <p>The catalog truncates list outputs to the top 5 items (per spec) and
- * maintains a tiny per-invocation cache so the same tool call within one AI
- * loop is not repeated.
+ * <p>The catalog truncates list outputs to the top 5 items (per spec). For
+ * the tool-use loop's typical ≤8 calls per Lambda invocation a memo-style
+ * cache wasn't worth the complexity; if profiling later shows a single
+ * loop hammering the same tool with identical inputs we can add one.
  */
 final class ToolCatalog {
 
