@@ -63,8 +63,10 @@ mvn -pl . test       # unit + integration tests
 
 Deployment is automated via GitHub Actions on push to `main` (OIDC
 federated, no static keys). See CLAUDE.md §12 for the pre-deploy
-checklist (SES production access, Bedrock model access, SSM
-SecureString parameters, etc.).
+checklist (SES production access, Bedrock model access, sender-email
+secret, etc.). Runtime configuration is set via Lambda environment
+variables in `terraform/main/lambda.tf`; `application.yml` provides the
+default values.
 
 The Terraform stack is split into:
 
@@ -75,14 +77,19 @@ The Terraform stack is split into:
 
 ## Operations
 
-A small CLI script wraps the AWS SDK to manage instruments without an
-HTTP API. Examples (see CLAUDE.md §10):
+CLAUDE.md §10 sketches a `mon` CLI that wraps the AWS SDK to manage
+instruments without an HTTP API. The CLI is **planned**, not yet
+implemented — for now, the registry / config / manual-run operations
+are exercised via direct AWS SDK calls (see `MonitoringMainHandler`'s
+input shape and the `InstrumentRegistry` / `InstrumentConfigService`
+public methods) or via `aws lambda invoke` with the equivalent payload.
 
 ```bash
-mon register --ticker AAPL --exchange NASDAQ
-mon config set --id <uuid> --policy ROLLING_WINDOW --window 200
-mon config recipients --id <uuid> --add me@example.com
-mon run --instruments <uuid1>,<uuid2>
+# Manual one-shot run of the daily pipeline against a specific instrument:
+aws lambda invoke \
+  --function-name monitoring-main:live \
+  --payload '{"instrument_ids": ["<uuid>"]}' \
+  /dev/null
 ```
 
 ## License
