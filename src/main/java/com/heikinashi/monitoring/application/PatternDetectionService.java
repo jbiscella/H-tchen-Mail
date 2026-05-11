@@ -71,6 +71,7 @@ public class PatternDetectionService {
         List<HABar> sortedNew = new ArrayList<>(newHaBars);
         sortedNew.sort(Comparator.comparing(HABar::barTime));
         Instant earliest = sortedNew.get(0).barTime();
+        Instant latest = sortedNew.get(sortedNew.size() - 1).barTime();
 
         // K = max(min_streak_length over enabled color_change patterns) + M
         int k = 0;
@@ -87,7 +88,11 @@ public class PatternDetectionService {
         chain.addAll(sortedNew);
 
         // Pre-fetch OHLC bars across the new-bar window so we can build BarSnapshots.
-        List<OHLCBar> ohlcRange = ohlc.findRange(instrument.id(), tf, earliest);
+        // Bound the read by the latest new HA bar — under FULL_HISTORY an
+        // unbounded lower-only query reads every bar ever stored for the
+        // instrument, even though we only need the window we just computed HA
+        // for.
+        List<OHLCBar> ohlcRange = ohlc.findRange(instrument.id(), tf, earliest, latest);
         Map<Instant, OHLCBar> ohlcByTime = new HashMap<>();
         for (OHLCBar bar : ohlcRange) {
             ohlcByTime.put(bar.barTime(), bar);
