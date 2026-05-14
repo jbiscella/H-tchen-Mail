@@ -17,6 +17,31 @@ This is the authoritative specification document for the project. Claude Code re
 
 The document is **language-agnostic where it can be**. Java/Micronaut/AWS-specific notes appear only where Claude Code might otherwise make a wrong default choice (e.g., Spring vs Micronaut annotations, BigDecimal vs double, JFreeChart specifics).
 
+## Generating a context bundle for chat.com
+
+When the operator says "genera context bundle" or "/context-bundle", 
+produce a single markdown file `CONTEXT_BUNDLE.md` in the repo root 
+containing:
+
+1. **Project snapshot**: project name, current version, last commit sha, 
+   date.
+2. **ADR summary**: 5-line recap of the stack from CLAUDE.md.
+3. **Implementation status per block**: for each block in CLAUDE.md, 
+   one of {not started | in progress | done | drifted from spec}, 
+   with a one-line note. "Drifted" requires explanation.
+4. **Open TODOs**: list of TODO/FIXME comments in code, with file:line.
+5. **Known divergences from CLAUDE.md**: explicit list of decisions 
+   made during implementation that contradict or extend the spec, 
+   with rationale.
+6. **Recent changes**: last 10 git commits with one-line summaries.
+7. **Pending questions**: open issues or design questions that need 
+   architectural input (these are what I'll discuss in chat.com).
+8. **NOT included**: full source code, full test output, dependency 
+   tree. Keep the bundle under 500 lines.
+
+After generating, print the file path and a one-paragraph summary 
+of what's in it.
+
 ---
 
 ## 1. Architecture Decision Record (ADR)
