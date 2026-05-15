@@ -54,6 +54,10 @@ resource "aws_lambda_function" "main" {
       MONITORING_EODHD_API_KEY      = var.eodhd_api_key
       MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
       MONITORING_SES_REGION         = var.ses_region
+      # JFreeChart/AWT writes a fontconfig cache at startup; the Lambda
+      # filesystem is read-only except /tmp, so point the cache there to
+      # silence the repeated "No writable cache directories" warnings.
+      XDG_CACHE_HOME = "/tmp"
     }
   }
 
@@ -122,6 +126,10 @@ resource "aws_lambda_function" "retry" {
       MONITORING_EODHD_API_KEY      = var.eodhd_api_key
       MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
       MONITORING_SES_REGION         = var.ses_region
+      # JFreeChart/AWT writes a fontconfig cache at startup; the Lambda
+      # filesystem is read-only except /tmp, so point the cache there to
+      # silence the repeated "No writable cache directories" warnings.
+      XDG_CACHE_HOME = "/tmp"
     }
   }
 
