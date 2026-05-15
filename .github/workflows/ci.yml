@@ -29,6 +29,7 @@ env:
   TF_VAR_ses_sender_email: ${{ vars.SES_SENDER_EMAIL || 'noreply@biscella.com' }}
   TF_VAR_bedrock_model_id: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
   TF_VAR_eodhd_api_key: ${{ secrets.EODHD_KEY }}
+  TF_VAR_marketaux_api_key: ${{ secrets.MARKETAUX_KEY }}
 
 jobs:
   # --- Build + tests --------------------------------------------------------
