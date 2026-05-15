@@ -23,7 +23,7 @@ public record IngestionConfig(
         return v == null ? 0 : v;
     }
 
-    public String yahooSymbol(String ticker, String exchange) {
+    public String providerSymbol(String ticker, String exchange) {
         String suffix = exchangeSuffixMap.getOrDefault(exchange, "");
         return ticker + suffix;
     }
