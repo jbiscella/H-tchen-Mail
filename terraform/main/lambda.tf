@@ -48,8 +48,9 @@ resource "aws_lambda_function" "main" {
 
   environment {
     variables = {
-      LOG_LEVEL        = "INFO"
-      MONITORING_TABLE = aws_dynamodb_table.monitoring.name
+      LOG_LEVEL                     = "INFO"
+      MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
+      MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
     }
   }
 
@@ -112,8 +113,9 @@ resource "aws_lambda_function" "retry" {
 
   environment {
     variables = {
-      LOG_LEVEL        = "INFO"
-      MONITORING_TABLE = aws_dynamodb_table.monitoring.name
+      LOG_LEVEL                     = "INFO"
+      MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
+      MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
     }
   }
 
