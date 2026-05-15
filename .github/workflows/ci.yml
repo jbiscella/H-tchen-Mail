@@ -340,36 +340,54 @@ jobs:
           echo "  candidate resources:"
           echo "    - $FM_ARN"
           echo "    - $PROFILE_ARN"
+          echo
 
-          # Run the simulator once with both ARNs and both actions. We get back
-          # one EvaluationResult per (action, resource) pair (4 total). For
-          # this check to pass at least one resource must allow BOTH actions.
-          # CLI failures (e.g. missing iam:SimulatePrincipalPolicy on the
-          # caller, bad ARN format) are surfaced verbatim — never swallowed.
-          if ! RAW=$(aws iam simulate-principal-policy \
-                --policy-source-arn "$ROLE_ARN" \
-                --action-names bedrock:InvokeModel bedrock:Converse \
-                --resource-arns "$FM_ARN" "$PROFILE_ARN" \
-                --output json 2>&1); then
-            echo "::error::simulate-principal-policy CLI call failed:"
-            echo "$RAW"
-            exit 1
-          fi
+          # simulate-principal-policy rejects bedrock:InvokeModel and
+          # bedrock:Converse in the same request ("require different
+          # authorization information"), so we run one call per action and
+          # intersect the allowed resources. Pass condition: there exists
+          # at least one ARN that allows BOTH actions — that's the same
+          # ARN runtime will hit.
+          simulate_one() {
+            local action=$1
+            aws iam simulate-principal-policy \
+              --policy-source-arn "$ROLE_ARN" \
+              --action-names "$action" \
+              --resource-arns "$FM_ARN" "$PROFILE_ARN" \
+              --output json 2>&1
+          }
 
-          echo "Evaluation results:"
-          echo "$RAW" | jq -r '.EvaluationResults[] | "  \(.EvalDecision)\t\(.EvalActionName)\ton\t\(.EvalResourceName)"'
+          allowed_for() {
+            jq -r '.EvaluationResults[] | select(.EvalDecision == "allowed") | .EvalResourceName'
+          }
 
-          # Pass condition: there exists a resource for which BOTH actions are
-          # 'allowed'. We group by resource and check the count of 'allowed'.
-          if echo "$RAW" | jq -e '
-                [.EvaluationResults[] | select(.EvalDecision == "allowed") | .EvalResourceName]
-                  | group_by(.) | map(select(length == 2)) | length > 0
-              ' >/dev/null; then
-            echo "::notice::Lambda role can invoke Bedrock (both actions allowed on at least one ARN)"
+          declare -A ALLOWED
+          for action in bedrock:InvokeModel bedrock:Converse; do
+            echo "--- $action"
+            if ! RAW=$(simulate_one "$action"); then
+              echo "::error::simulate-principal-policy CLI call failed for $action:"
+              echo "$RAW"
+              exit 1
+            fi
+            echo "$RAW" | jq -r '.EvaluationResults[] | "  \(.EvalDecision)\ton\t\(.EvalResourceName)"'
+            ALLOWED[$action]=$(echo "$RAW" | allowed_for | sort -u)
+          done
+
+          COMMON=$(comm -12 \
+            <(printf '%s\n' "${ALLOWED[bedrock:InvokeModel]}") \
+            <(printf '%s\n' "${ALLOWED[bedrock:Converse]}"))
+          # comm with empty inputs yields a single empty line; filter blanks.
+          COMMON=$(printf '%s\n' "$COMMON" | sed '/^$/d')
+
+          if [[ -n "$COMMON" ]]; then
+            echo
+            echo "::notice::Lambda role can do BOTH InvokeModel and Converse on:"
+            printf '%s\n' "$COMMON" | sed 's/^/  - /'
             exit 0
           fi
 
-          echo "::error::Lambda role lacks bedrock:InvokeModel + bedrock:Converse on every tested ARN."
+          echo
+          echo "::error::No ARN allows BOTH bedrock:InvokeModel and bedrock:Converse for $ROLE_ARN."
           echo "::error::Check terraform/main/iam.tf BedrockInvoke statement and the BEDROCK_MODEL_ID repo variable."
           exit 1
 
