@@ -94,6 +94,12 @@ variable "eodhd_api_key" {
   sensitive   = true
 }
 
+variable "marketaux_api_key" {
+  description = "Marketaux API token. Populated from the MARKETAUX_KEY GitHub secret via TF_VAR_marketaux_api_key. Never default — boot fails fast if missing."
+  type        = string
+  sensitive   = true
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log group retention for both Lambdas."
   type        = number

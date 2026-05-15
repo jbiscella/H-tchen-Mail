@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "found": 3,
+    "returned": 3,
+    "limit": 3,
+    "page": 1
+  },
+  "data": [
+    {
+      "uuid": "a1b2c3d4-0001-0001-0001-000000000001",
+      "title": "Richemont posts record full-year sales on jewellery demand",
+      "description": "The Swiss luxury group reported sales above analyst expectations.",
+      "url": "https://example.com/news/richemont-record-sales",
+      "published_at": "2026-05-14T06:30:00.000000Z",
+      "source": "reuters.com",
+      "entities": [
+        {"symbol": "CFR.SW", "name": "Compagnie Financiere Richemont", "sentiment_score": 0.72}
+      ]
+    },
+    {
+      "uuid": "a1b2c3d4-0002-0002-0002-000000000002",
+      "title": "Analysts weigh Richemont's China exposure ahead of guidance",
+      "description": "Coverage of the watch and jewellery maker's outlook.",
+      "url": "https://example.com/news/richemont-china",
+      "published_at": "2026-05-13T15:05:00.000000Z",
+      "source": "bloomberg.com",
+      "entities": [
+        {"symbol": "CFR.SW", "name": "Compagnie Financiere Richemont", "sentiment_score": 0.0}
+      ]
+    },
+    {
+      "uuid": "a1b2c3d4-0003-0003-0003-000000000003",
+      "title": "Swiss luxury sector rebounds as tourism recovers",
+      "description": "Sector-wide note touching several listed names.",
+      "url": "https://example.com/news/swiss-luxury-rebound",
+      "published_at": "2026-05-12T09:00:00.000000Z",
+      "source": "ft.com",
+      "entities": [
+        {"symbol": "CFR.SW", "name": "Compagnie Financiere Richemont", "sentiment_score": 0.41}
+      ]
+    }
+  ]
+}

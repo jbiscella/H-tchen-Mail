@@ -155,6 +155,7 @@ final class ToolCatalog {
             m.put("title", Document.fromString(h.title()));
             m.put("date", Document.fromString(h.publishedAt().toString()));
             m.put("source", Document.fromString(h.source()));
+            m.put("url", Document.fromString(h.url()));
             items.add(Document.fromMap(m));
         }
         Map<String, Document> root = new LinkedHashMap<>();
