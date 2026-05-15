@@ -1,22 +1,30 @@
 package com.heikinashi.monitoring.application;
 
 import com.heikinashi.monitoring.application.config.RunConfig;
+import com.heikinashi.monitoring.domain.BarSnapshot;
 import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.InstrumentStatus;
 import com.heikinashi.monitoring.domain.MainInput;
 import com.heikinashi.monitoring.domain.MainSummary;
 import com.heikinashi.monitoring.domain.OHLCBar;
+import com.heikinashi.monitoring.domain.OhlcRepository;
 import com.heikinashi.monitoring.domain.Page;
 import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.PatternKind;
+import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.DomainException;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +53,8 @@ public class MonitoringRunService {
     private final HeikinAshiService heikinAshiService;
     private final PatternDetectionService detectionService;
     private final AlertDispatchService dispatchService;
+    private final OhlcRepository ohlcRepository;
+    private final HaRepository haRepository;
     private final Clock clock;
     private final Duration softTimeout;
 
@@ -54,6 +64,8 @@ public class MonitoringRunService {
             HeikinAshiService heikinAshiService,
             PatternDetectionService detectionService,
             AlertDispatchService dispatchService,
+            OhlcRepository ohlcRepository,
+            HaRepository haRepository,
             Clock clock,
             RunConfig runConfig) {
         this.instruments = instruments;
@@ -61,6 +73,8 @@ public class MonitoringRunService {
         this.heikinAshiService = heikinAshiService;
         this.detectionService = detectionService;
         this.dispatchService = dispatchService;
+        this.ohlcRepository = ohlcRepository;
+        this.haRepository = haRepository;
         this.clock = clock;
         this.softTimeout = runConfig.softTimeout();
     }
@@ -85,6 +99,7 @@ public class MonitoringRunService {
             }
             summary = summary.plusProcessed();
             List<PatternEvent> instrumentEvents = new ArrayList<>();
+            Map<Timeframe, Boolean> realEventForTf = new LinkedHashMap<>();
             try {
                 Map<Timeframe, List<OHLCBar>> insertedByTf = ingestionService.ingestInstrument(inst);
                 int barCount = 0;
@@ -98,7 +113,39 @@ public class MonitoringRunService {
                     List<PatternEvent> events = detectionService.detectPatterns(inst, entry.getKey(), haBars);
                     instrumentEvents.addAll(events);
                     summary = summary.addEvents(events.size());
+                    realEventForTf.merge(entry.getKey(), !events.isEmpty(), Boolean::logicalOr);
                 }
+
+                // force_email escape hatch: for every tracked timeframe that did
+                // NOT produce a real event this run, synthesize a single forced
+                // event from the latest persisted HA + OHLC so the chart + AI
+                // + email pipeline runs end-to-end. Skips silently if there's
+                // no persisted HA bar yet (first-ever ingest for that
+                // instrument).
+                if (input.forceEmail()) {
+                    InstrumentConfig cfg = instruments
+                            .findConfigById(inst.id())
+                            .orElseThrow(() -> new IllegalStateException("missing config for " + inst.id()));
+                    for (Timeframe tf : cfg.trackedTimeframes()) {
+                        if (Boolean.TRUE.equals(realEventForTf.get(tf))) continue;
+                        Optional<PatternEvent> forced = buildForcedEvent(inst, tf);
+                        if (forced.isPresent()) {
+                            instrumentEvents.add(forced.get());
+                            summary = summary.addEvents(1);
+                            LOG.info(
+                                    "main_forced_event instrument_id={} timeframe={} bar_time={}",
+                                    inst.id(),
+                                    tf.wire(),
+                                    forced.get().barTime());
+                        } else {
+                            LOG.warn(
+                                    "main_forced_event_skipped instrument_id={} timeframe={} reason=no_ha_bar",
+                                    inst.id(),
+                                    tf.wire());
+                        }
+                    }
+                }
+
                 summary = summary.plusSucceeded();
             } catch (RuntimeException e) {
                 summary = summary.plusFailed();
@@ -180,5 +227,47 @@ public class MonitoringRunService {
             return de.code();
         }
         return e.getClass().getSimpleName();
+    }
+
+    /**
+     * Synthesise a PatternEvent labelled FORCED/FORCED so the chart + AI +
+     * email pipeline can be exercised end-to-end without waiting for a real
+     * pattern. Reads the latest HA bar (and matching OHLC) from persistence
+     * — when there isn't one yet (first ingest for the instrument) the
+     * call returns empty and the caller logs + skips.
+     */
+    private Optional<PatternEvent> buildForcedEvent(Instrument inst, Timeframe tf) {
+        Instant cutoff = clock.instant().plusSeconds(1);
+        Optional<HABar> latestHa = haRepository.findLatestBefore(inst.id(), tf, cutoff);
+        if (latestHa.isEmpty()) {
+            return Optional.empty();
+        }
+        HABar ha = latestHa.get();
+        List<OHLCBar> matching = ohlcRepository.findRange(inst.id(), tf, ha.barTime(), ha.barTime());
+        if (matching.isEmpty()) {
+            return Optional.empty();
+        }
+        OHLCBar ohlc = matching.get(0);
+        BarSnapshot snapshot = new BarSnapshot(
+                ohlc.open(),
+                ohlc.high(),
+                ohlc.low(),
+                ohlc.close(),
+                ohlc.volume(),
+                ha.haOpen(),
+                ha.haHigh(),
+                ha.haLow(),
+                ha.haClose());
+        return Optional.of(new PatternEvent(
+                inst.id(),
+                inst.ticker(),
+                inst.exchange(),
+                tf,
+                ha.barTime(),
+                PatternKind.FORCED,
+                PatternSubtype.FORCED,
+                Map.of("forced", "true"),
+                snapshot,
+                clock.instant()));
     }
 }
