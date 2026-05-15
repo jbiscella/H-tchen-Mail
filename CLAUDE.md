@@ -68,7 +68,7 @@ of what's in it.
 | CI/CD                 | **GitHub Actions** with **OIDC** federation to AWS                  |
 | Environments          | **single environment** (`prod`)                                     |
 | Region (compute/DB)   | `eu-central-1` (configurable)                                       |
-| Region (SES)          | `eu-south-1` (configurable, separate)                               |
+| Region (SES)          | `eu-central-1` (configurable, separate variable kept for forward-compat) |
 
 ### Architectural principles
 
@@ -1724,7 +1724,7 @@ CLI uses AWS SDK v2 directly against DynamoDB / Lambda. No HTTP API.
 | Apply               | GitHub Actions on push to `main` (OIDC)             |
 | State backend       | S3 (versioning + encryption) + DynamoDB lock        |
 | Region (compute)    | `eu-central-1`                                      |
-| Region (SES)        | `eu-south-1`                                        |
+| Region (SES)        | `eu-central-1`                                      |
 | Naming              | `monitoring-<resource>` (kebab-case)                |
 | Mandatory tags      | `Project=monitoring`, `ManagedBy=terraform`, `Environment=prod` |
 
@@ -2017,7 +2017,7 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 | `/monitoring/email/subject-prefix`                | String        | `[HA Alert]`                                     |                                    |
 | `/monitoring/email/charset`                       | String        | `UTF-8`                                          |                                    |
 | `/monitoring/ses/sender-email`                    | SecureString  | —                                                | populated manually                 |
-| `/monitoring/ses/region`                          | String        | `eu-south-1`                                     |                                    |
+| `/monitoring/ses/region`                          | String        | `eu-central-1`                                   |                                    |
 | `/monitoring/ses/reply-to`                        | String        | (empty)                                          | optional                           |
 | `/monitoring/alerts/audit-enabled`                | String        | `false`                                          |                                    |
 | `/monitoring/retry/max-attempts`                  | String        | `3`                                              |                                    |
