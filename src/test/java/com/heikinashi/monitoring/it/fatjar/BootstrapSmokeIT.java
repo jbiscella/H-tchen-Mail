@@ -43,6 +43,7 @@ class BootstrapSmokeIT {
         env.put("MONITORING_TABLE", "smoke-table");
         env.put("MONITORING_EMAIL_SENDER_EMAIL", "smoke@example.com");
         env.put("MONITORING_EODHD_API_KEY", "smoke-token");
+        env.put("MONITORING_MARKETAUX_API_KEY", "smoke-token");
         env.put("MONITORING_BEDROCK_MODEL_ID", "smoke-model");
         env.put("AWS_REGION", "eu-central-1");
         pb.redirectOutput(stdoutFile.toFile());

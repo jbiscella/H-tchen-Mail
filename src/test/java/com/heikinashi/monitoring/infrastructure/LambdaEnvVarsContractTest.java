@@ -33,6 +33,7 @@ class LambdaEnvVarsContractTest {
             "MONITORING_TABLE",
             "MONITORING_EMAIL_SENDER_EMAIL",
             "MONITORING_EODHD_API_KEY",
+            "MONITORING_MARKETAUX_API_KEY",
             "MONITORING_BEDROCK_MODEL_ID");
 
     @Test
