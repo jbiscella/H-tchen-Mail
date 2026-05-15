@@ -7,7 +7,7 @@ variable "region" {
 variable "ses_region" {
   description = "AWS region for the SES identity (separate per CLAUDE.md §1)."
   type        = string
-  default     = "eu-south-1"
+  default     = "eu-central-1"
 }
 
 variable "table_name" {
