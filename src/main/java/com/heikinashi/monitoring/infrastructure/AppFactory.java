@@ -23,6 +23,18 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
 
+/**
+ * Micronaut {@link Factory} for the application-scoped singletons that aren't
+ * picked up by classpath scanning: the injected {@link Clock}, the AWS SDK v2
+ * clients (DynamoDB / Bedrock / SES), the {@link InstrumentRegistry}, and the
+ * {@link IngestionConfig} assembled from {@code application.yml} values.
+ *
+ * <p>Centralising these here keeps the construction explicit (CLAUDE.md §13:
+ * "explicit {@code @Factory} over auto-discovery") — region, timeouts and the
+ * exchange suffix map are read once, at context init, and the same client
+ * instances are reused across Lambda invocations (SnapStart-safe: no
+ * per-invocation state).
+ */
 @Factory
 public class AppFactory {
 
