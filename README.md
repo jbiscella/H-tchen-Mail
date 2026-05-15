@@ -105,6 +105,21 @@ implemented — for now:
     --payload '{"instrument_ids": ["<uuid>"]}' \
     /dev/null
   ```
+- **End-to-end pipeline smoke** (sends an email even if no pattern
+  fires — useful to verify EODHD + Bedrock + SES wiring after a
+  deploy without waiting for a real signal):
+
+  ```bash
+  aws lambda invoke \
+    --function-name monitoring-main:live \
+    --payload '{"force_email": true}' \
+    /dev/null
+  ```
+
+  Each (instrument, tracked-timeframe) without a real pattern this run
+  gets one synthetic `forced/forced` event built from its latest
+  persisted HA + OHLC bar. Skips silently when no HA bar exists yet
+  (first ingest). Combine with `instrument_ids` to scope it.
 
 ## License
 

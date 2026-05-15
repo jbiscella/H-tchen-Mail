@@ -8,7 +8,6 @@ import jakarta.inject.Inject;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * AWS Lambda entry point for {@code monitoring-main} (CLAUDE.md §10).
@@ -26,35 +25,9 @@ public class MonitoringMainHandler extends MicronautRequestHandler<Map<String, O
 
     @Override
     public Map<String, Object> execute(Map<String, Object> input) {
-        MainInput mainInput = parseInput(input);
+        MainInput mainInput = MainInputParser.parse(input);
         MainSummary summary = runService.execute(mainInput);
         return summaryToMap(summary);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static MainInput parseInput(Map<String, Object> input) {
-        if (input == null) {
-            return MainInput.allActive();
-        }
-        boolean forceEmail = parseBoolean(input.get("force_email"));
-        Object ids = input.get("instrument_ids");
-        MainInput base;
-        if (ids instanceof java.util.Collection<?> col && !col.isEmpty()) {
-            Set<String> set = new java.util.LinkedHashSet<>();
-            for (Object id : col) {
-                if (id != null) set.add(id.toString());
-            }
-            base = MainInput.forInstruments(set);
-        } else {
-            base = MainInput.allActive();
-        }
-        return forceEmail ? base.withForceEmail(true) : base;
-    }
-
-    private static boolean parseBoolean(Object value) {
-        if (value instanceof Boolean b) return b;
-        if (value == null) return false;
-        return Boolean.parseBoolean(value.toString());
     }
 
     private static Map<String, Object> summaryToMap(MainSummary s) {
