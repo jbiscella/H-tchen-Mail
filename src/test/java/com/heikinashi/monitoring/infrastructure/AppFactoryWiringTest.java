@@ -23,7 +23,8 @@ import software.amazon.awssdk.services.sesv2.SesV2Client;
  */
 class AppFactoryWiringTest {
 
-    private static final Map<String, Object> OVERRIDES = Map.of("monitoring.email.sender-email", "alerts@test.local");
+    private static final Map<String, Object> OVERRIDES =
+            Map.of("monitoring.email.sender-email", "alerts@test.local", "monitoring.eodhd.api-key", "test-token");
 
     @Test
     void context_boots_and_provides_aws_clients() {

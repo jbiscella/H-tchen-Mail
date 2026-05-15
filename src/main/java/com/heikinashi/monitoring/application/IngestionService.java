@@ -122,7 +122,7 @@ public class IngestionService {
     }
 
     public List<OHLCBar> ingestTimeframe(Instrument inst, Timeframe tf, InstrumentConfig cfg) {
-        String symbol = config.yahooSymbol(inst.ticker(), inst.exchange());
+        String symbol = config.providerSymbol(inst.ticker(), inst.exchange());
         Optional<OHLCBar> latest = ohlc.findLatest(inst.id(), tf);
 
         Instant since = latest.map(b -> b.barTime().plusSeconds(Timeframes.periodSeconds(tf)))
