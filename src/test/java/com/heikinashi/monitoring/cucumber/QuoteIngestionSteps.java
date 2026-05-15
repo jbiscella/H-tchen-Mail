@@ -69,12 +69,28 @@ public class QuoteIngestionSteps {
 
     @Given("the provider raises a {string} error for symbol {string}")
     public void provider_raises_error_for_symbol(String error, String symbolOrTicker) {
-        // The fake keys errors by symbol; for plain tickers we assume no exchange suffix.
+        // The fake keys errors by the symbol the production code asks for. When
+        // the step passes a bare ticker (no dot) we resolve it to the EODHD
+        // symbol via the registered Instrument's exchange; full symbols pass
+        // through unchanged for direct testing.
+        String symbol = resolveSymbol(symbolOrTicker);
         switch (error) {
-            case "ticker_not_found" -> world.marketData().primeNotFound(symbolOrTicker);
-            case "provider_unavailable" -> world.marketData().primeProviderUnavailable(symbolOrTicker);
-            case "schema_drift" -> world.marketData().primeSchemaDrift(symbolOrTicker);
+            case "ticker_not_found" -> world.marketData().primeNotFound(symbol);
+            case "provider_unavailable" -> world.marketData().primeProviderUnavailable(symbol);
+            case "schema_drift" -> world.marketData().primeSchemaDrift(symbol);
             default -> throw new IllegalArgumentException("unknown error type: " + error);
+        }
+    }
+
+    private String resolveSymbol(String symbolOrTicker) {
+        if (symbolOrTicker.contains(".")) {
+            return symbolOrTicker;
+        }
+        try {
+            String id = world.idByAlias(symbolOrTicker);
+            return symbolFor(world.repository().findById(id).orElseThrow());
+        } catch (IllegalStateException unknownAlias) {
+            return symbolOrTicker;
         }
     }
 
@@ -143,13 +159,14 @@ public class QuoteIngestionSteps {
         Set<String> expected = Arrays.stream(csv.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
+                .map(this::resolveSymbol)
                 .collect(Collectors.toSet());
         assertThat(world.marketData().calledSymbols()).containsAll(expected);
     }
 
     @Then("the provider was not called for symbol {string}")
     public void provider_not_called_for_symbol(String symbol) {
-        assertThat(world.marketData().calledSymbols()).doesNotContain(symbol);
+        assertThat(world.marketData().calledSymbols()).doesNotContain(resolveSymbol(symbol));
     }
 
     @Then("the ingestion summary has processed={int}, succeeded={int}, failed={int}")
@@ -224,14 +241,18 @@ public class QuoteIngestionSteps {
     }
 
     private String symbolFor(Instrument inst) {
-        // mirror IngestionConfig#yahooSymbol with the same suffix map the World wires up
+        // mirror IngestionConfig#providerSymbol with the same suffix map the World wires up
         Map<String, String> map = Map.of(
+                "NASDAQ", ".US",
+                "NYSE", ".US",
                 "MIL", ".MI",
-                "XETRA", ".DE",
-                "LSE", ".L",
+                "XETRA", ".XETRA",
+                "LSE", ".LSE",
                 "TSX", ".TO",
                 "PAR", ".PA",
-                "AMS", ".AS");
+                "AMS", ".AS",
+                "SWX", ".SW",
+                "BME", ".MC");
         return inst.ticker() + map.getOrDefault(inst.exchange(), "");
     }
 }

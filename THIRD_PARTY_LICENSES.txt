@@ -1,5 +1,5 @@
 
-Lists of 154 third-party dependencies.
+Lists of 153 third-party dependencies.
      (Apache-2.0) Apache Commons Codec (commons-codec:commons-codec:1.17.1 - https://commons.apache.org/proper/commons-codec/)
      (Apache-2.0) Apache Commons Compress (org.apache.commons:commons-compress:1.26.0 - https://commons.apache.org/proper/commons-compress/)
      (Apache-2.0) Apache Commons Email Core (org.apache.commons:commons-email2-core:2.0.0-M1 - https://commons.apache.org/proper/commons-email/commons-email2-core/)
@@ -153,4 +153,3 @@ Lists of 154 third-party dependencies.
      (MIT) Testcontainers :: Localstack (org.testcontainers:localstack:1.21.4 - https://java.testcontainers.org)
      (MIT) Testcontainers Core (org.testcontainers:testcontainers:1.21.4 - https://java.testcontainers.org)
      (MIT License) TestNG XML Formatter (io.cucumber:testng-xml-formatter:0.2.0 - https://github.com/cucumber/testng-xml-formatter)
-     (MIT License) YahooFinanceAPI (de.sfuhrm:YahooFinanceAPI:3.17.0 - http://financequotes-api.com)

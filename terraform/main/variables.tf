@@ -88,6 +88,12 @@ variable "bedrock_model_id" {
   default     = "anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
+variable "eodhd_api_key" {
+  description = "EODHD API token. Populated from the EODHD_KEY GitHub secret via TF_VAR_eodhd_api_key. Never default — boot fails fast if missing."
+  type        = string
+  sensitive   = true
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log group retention for both Lambdas."
   type        = number

@@ -38,7 +38,6 @@
         <aws.sdk.version>2.30.0</aws.sdk.version>
         <jfreechart.version>1.5.5</jfreechart.version>
         <commons.email.version>2.0.0-M1</commons.email.version>
-        <yahoofinance.version>3.17.0</yahoofinance.version>
         <logstash.encoder.version>8.0</logstash.encoder.version>
 
         <junit.version>5.11.4</junit.version>
@@ -146,11 +145,15 @@
             <artifactId>cloudwatch</artifactId>
         </dependency>
 
-        <!-- Market data -->
+        <!--
+            Market data: EODHD via java.net.http.HttpClient + Jackson for JSON.
+            jackson-databind is managed by micronaut-parent and was previously
+            pulled transitively by the (now removed) Yahoo lib; declared
+            explicitly so removing other deps can't break the build.
+        -->
         <dependency>
-            <groupId>de.sfuhrm</groupId>
-            <artifactId>YahooFinanceAPI</artifactId>
-            <version>${yahoofinance.version}</version>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
         </dependency>
 
         <!-- Charting -->
@@ -365,7 +368,7 @@
                         <exclude>com/heikinashi/monitoring/infrastructure/dynamodb/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/bedrock/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/email/Ses*</exclude>
-                        <exclude>com/heikinashi/monitoring/infrastructure/yahoo/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/eodhd/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/chart/**</exclude>
                         <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
                     </excludes>

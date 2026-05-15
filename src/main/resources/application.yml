@@ -8,16 +8,21 @@ micronaut:
 # Lambda function's environment.variables block (terraform/main/lambda.tf).
 monitoring:
   market-data:
-    provider: yahoo
-    yahoo:
-      timeout-seconds: 10
-      max-rps: 1
+    provider: eodhd
+  eodhd:
+    # api-key is set via the MONITORING_EODHD_API_KEY env var (terraform/main/lambda.tf,
+    # populated from the EODHD_KEY GitHub secret). No default — boot fails fast if missing.
+    base-url: https://eodhd.com/api
+    timeout-seconds: 10
   bootstrap:
     size-1d: 250
     size-1w: 260
   exchanges:
     supported: NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME
-    suffix-map: '{"MIL":".MI","XETRA":".DE","LSE":".L","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
+    # EODHD ticker suffix per exchange. EODHD uses a single ".US" code for
+    # NASDAQ + NYSE + ARCA + OTC, and ".LSE" / ".XETRA" (not the Yahoo
+    # ".L" / ".DE") for London and Frankfurt.
+    suffix-map: '{"NASDAQ":".US","NYSE":".US","MIL":".MI","XETRA":".XETRA","LSE":".LSE","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
   ingest:
     circuit-breaker:
       threshold: 3
