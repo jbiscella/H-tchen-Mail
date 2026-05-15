@@ -283,19 +283,14 @@ The exchange you pass **must** be in
 | `NYSE` | (none) | `IBM` |
 | `MIL` | `.MI` | `ENI.MI` (Eni) |
 | `XETRA` | `.DE` | `SAP.DE` |
-| `LSE` | `.L` | `BP.L`, `GAW.L` |
+| `LSE` | `.L` | `BP.L`, `GAW.L` (Games Workshop) |
 | `TSX` | `.TO` | `RY.TO` |
 | `PAR` | `.PA` | `AIR.PA` (Airbus) |
-| `AMS` | `.AS` | `ASML.AS` |
+| `AMS` | `.AS` | `ASML.AS` (Euronext Amsterdam) |
+| `SWX` | `.SW` | `CFR.SW` (Richemont), `NESN.SW` (Nestlé) |
+| `BME` | `.MC` | `AMS.MC` (Amadeus IT Group) |
 
-To add another exchange (e.g. SIX Swiss `SWX` → `.SW`, BME Madrid →
-`.MC`), update **two** places before redeploying:
-
-1. `terraform/main/lambda.tf` `environment.variables` — append the
-   exchange code to `MONITORING_EXCHANGES_SUPPORTED` and the suffix to
-   the JSON in `MONITORING_EXCHANGES_SUFFIX_MAP`.
-2. (Optional) the SSM catalog in `terraform/main/ssm.tf` if you want
-   the operator documentation to match.
+To add yet another exchange, edit a single place: `terraform/main/locals.tf` `exchange_suffix_map`. Both the Lambda env vars (lambda.tf) and the SSM catalog (ssm.tf) reference that local, so one edit propagates everywhere. Commit + push; CI redeploys the Lambdas with the new env vars.
 
 ### Recipe — register an instrument
 
