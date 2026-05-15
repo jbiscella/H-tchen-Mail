@@ -34,6 +34,24 @@ public class YahooFinanceProvider implements MarketDataProvider {
     private static final Logger LOG = LoggerFactory.getLogger(YahooFinanceProvider.class);
     private static final String PROVIDER = "yahoo";
 
+    /*
+     * The library hardcodes a Safari User-Agent only on the cookie/crumb
+     * bootstrap call (yahoofinance.histquotes2.CrumbManager). The actual
+     * historical-quote requests in yahoofinance.histquotes.HistQuotesRequest
+     * go out with no explicit UA, so the JVM default "Java/<version>" ends
+     * up on the wire — Yahoo's bot filter blocks that with HTTP 429.
+     *
+     * Setting http.agent at JVM level prefixes a browser-ish UA in front of
+     * the default, which Yahoo accepts. No setter is exposed by the library,
+     * and no system property maps to a UA override; this is the smallest
+     * non-forking fix.
+     */
+    static {
+        System.setProperty(
+                "http.agent",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    }
+
     private final Clock clock;
 
     public YahooFinanceProvider(Clock clock) {
