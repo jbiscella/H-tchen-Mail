@@ -81,6 +81,13 @@ data "aws_iam_policy_document" "lambda_perms" {
   # the DOMAIN identity for sub-addresses — so we have to grant the action
   # on both ARNs, not just the email identity, or SendRawEmail returns
   # AccessDeniedException with a resource pointing at identity/<domain>.
+  #
+  # Additionally, if the sender identity has a default configuration-set
+  # attached (account- or identity-level — set outside Terraform via the
+  # SES console for tracking bounces/complaints/opens), SES will also
+  # authorise SendRawEmail against the configuration-set ARN. The set
+  # name is account-managed and may change, so we wildcard within the
+  # account+region rather than pin it.
   statement {
     sid    = "SESSend"
     effect = "Allow"
@@ -91,6 +98,7 @@ data "aws_iam_policy_document" "lambda_perms" {
     resources = [
       "arn:aws:ses:${var.ses_region}:${local.account_id}:identity/${var.ses_sender_email}",
       "arn:aws:ses:${var.ses_region}:${local.account_id}:identity/${split("@", var.ses_sender_email)[1]}",
+      "arn:aws:ses:${var.ses_region}:${local.account_id}:configuration-set/*",
     ]
   }
 
