@@ -110,7 +110,17 @@ public class MonitoringRunService {
                 for (Map.Entry<Timeframe, List<OHLCBar>> entry : insertedByTf.entrySet()) {
                     if (entry.getValue().isEmpty()) continue;
                     List<HABar> haBars = heikinAshiService.computeFor(inst, entry.getKey(), entry.getValue());
-                    List<PatternEvent> events = detectionService.detectPatterns(inst, entry.getKey(), haBars);
+                    List<PatternEvent> raw = detectionService.detectPatterns(inst, entry.getKey(), haBars);
+                    List<PatternEvent> events = LatestBarEventFilter.keepLatestBarOnly(raw);
+                    int suppressed = raw.size() - events.size();
+                    if (suppressed > 0) {
+                        LOG.info(
+                                "main_events_suppressed instrument_id={} timeframe={} kept={} suppressed={}",
+                                inst.id(),
+                                entry.getKey().wire(),
+                                events.size(),
+                                suppressed);
+                    }
                     instrumentEvents.addAll(events);
                     summary = summary.addEvents(events.size());
                     realEventForTf.merge(entry.getKey(), !events.isEmpty(), Boolean::logicalOr);
