@@ -93,3 +93,9 @@ variable "log_retention_days" {
   type        = number
   default     = 30
 }
+
+variable "artifacts_bucket_name" {
+  description = "Globally unique name for the Lambda artifacts S3 bucket."
+  type        = string
+  default     = "monitoring-artifacts"
+}
