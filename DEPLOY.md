@@ -290,7 +290,7 @@ The exchange you pass **must** be in
 | `SWX` | `.SW` | `CFR.SW` (Richemont), `NESN.SW` (Nestlé) |
 | `BME` | `.MC` | `AMS.MC` (Amadeus IT Group) |
 
-To add yet another exchange, edit a single place: `terraform/main/locals.tf` `exchange_suffix_map`. Both the Lambda env vars (lambda.tf) and the SSM catalog (ssm.tf) reference that local, so one edit propagates everywhere. Commit + push; CI redeploys the Lambdas with the new env vars.
+To add yet another exchange, edit `monitoring.exchanges.supported` and `monitoring.exchanges.suffix-map` in [`application.yml`](src/main/resources/application.yml). Commit + push; CI rebuilds the jar with the new defaults baked in. Optionally mirror the change in `terraform/main/ssm.tf` to keep the operator-facing SSM catalog in sync.
 
 ### Recipe — register an instrument
 

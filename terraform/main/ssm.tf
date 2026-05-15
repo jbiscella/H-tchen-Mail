@@ -20,8 +20,19 @@ locals {
     "/monitoring/bootstrap/size-1d" = "250"
     "/monitoring/bootstrap/size-1w" = "260"
 
-    "/monitoring/exchanges/supported"  = local.supported_exchanges_csv
-    "/monitoring/exchanges/suffix-map" = local.exchange_suffix_map_json
+    "/monitoring/exchanges/supported" = "NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME"
+    "/monitoring/exchanges/suffix-map" = jsonencode({
+      NASDAQ = ""
+      NYSE   = ""
+      MIL    = ".MI"
+      XETRA  = ".DE"
+      LSE    = ".L"
+      TSX    = ".TO"
+      PAR    = ".PA"
+      AMS    = ".AS"
+      SWX    = ".SW"
+      BME    = ".MC"
+    })
 
     "/monitoring/ingest/circuit-breaker.threshold" = "3"
     "/monitoring/ingest/failure-rate-alert"        = "0.5"
