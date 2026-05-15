@@ -70,7 +70,8 @@ class EmailBodiesTest {
         assertThat(html).contains("<img src=\"cid:img-1\"");
         assertThat(html).contains("AAPL.NASDAQ");
         assertThat(html).contains("Heikin-Ashi pattern detected.");
-        assertThat(html).contains("--pattern=color_change/bullish_reversal");
+        assertThat(html).contains("INSTRUMENT");
+        assertThat(html).contains("color_change &middot; bullish_reversal");
         assertThat(html).contains("// corroborating");
         assertThat(html).contains("Earnings momentum supports the signal.");
         assertThat(html).contains("FUNDAMENTAL CONFIDENCE");
