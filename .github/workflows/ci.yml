@@ -194,10 +194,15 @@ jobs:
               body,
             });
 
-  # --- AWS preflight: verify upstream resources + IAM grants before apply --
+  # --- AWS preflight (pre-apply): verify account-level preconditions --------
+  #
+  # These two checks confirm resources that Terraform can't create on its own
+  # (Bedrock model access is a manual console request; SES identity DKIM
+  # verification needs DNS records outside the stack). Run them BEFORE
+  # terraform-apply so we fail fast on missing preconditions.
 
-  aws-preflight:
-    name: aws preflight (Bedrock + SES + IAM simulator)
+  aws-preflight-pre:
+    name: aws preflight pre-apply (Bedrock + SES)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
     needs: [verify, terraform-validate]
     runs-on: ubuntu-latest
@@ -253,46 +258,12 @@ jobs:
             exit 1
           fi
 
-      - name: IAM policy simulator — Lambda role can invoke Bedrock
-        env:
-          MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
-          LAMBDA_MAIN_NAME: ${{ env.LAMBDA_MAIN_NAME }}
-        run: |
-          set -e
-          ROLE_ARN=$(aws iam get-role --role-name "${LAMBDA_MAIN_NAME}-role" \
-            --query 'Role.Arn' --output text 2>/dev/null || echo "")
-          if [[ -z "$ROLE_ARN" ]]; then
-            echo "::warning::${LAMBDA_MAIN_NAME}-role does not exist yet (first deploy). Skipping IAM simulator."
-            exit 0
-          fi
-          echo "Simulating bedrock:InvokeModel / Converse against $ROLE_ARN"
-          # Try foundation-model ARN first; if that's denied, also try the
-          # inference-profile ARN. At least one must be allowed.
-          FM_ARN="arn:aws:bedrock:${AWS_REGION}::foundation-model/${MODEL_ID}"
-          PROFILE_ARN_PREFIX="arn:aws:bedrock:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):inference-profile/${MODEL_ID}"
-          for arn in "$FM_ARN" "$PROFILE_ARN_PREFIX"; do
-            DECISION=$(aws iam simulate-principal-policy \
-              --policy-source-arn "$ROLE_ARN" \
-              --action-names bedrock:InvokeModel bedrock:Converse \
-              --resource-arns "$arn" \
-              --query 'EvaluationResults[?EvalDecision!=`allowed`].[EvalActionName,EvalDecision]' \
-              --output text 2>/dev/null || echo "ERROR")
-            if [[ -z "$DECISION" ]]; then
-              echo "::notice::IAM allows bedrock:InvokeModel + Converse on $arn"
-              exit 0
-            fi
-            echo "Denied for $arn: $DECISION"
-          done
-          echo "::error::Lambda role lacks bedrock:InvokeModel/Converse on both $FM_ARN and $PROFILE_ARN_PREFIX."
-          echo "::error::Check terraform/main/iam.tf BedrockInvoke statement."
-          exit 1
-
   # --- Terraform apply on push to main --------------------------------------
 
   terraform-apply:
     name: terraform apply (main stack)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
-    needs: [verify, terraform-validate, aws-preflight]
+    needs: [verify, terraform-validate, aws-preflight-pre]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -322,12 +293,72 @@ jobs:
         working-directory: terraform/main
         run: terraform apply -auto-approve -input=false -lock-timeout=5m
 
+  # --- AWS preflight (post-apply): verify Terraform-managed IAM grants ------
+  #
+  # The Lambda role's inline policy is 100% terraform-managed, so the IAM
+  # policy-simulator check must run AFTER terraform-apply — otherwise a
+  # legitimate iam.tf change blocks its own deployment (the live role is
+  # stale until apply runs, but apply was gated on the stale role passing
+  # the simulator). Gating deploy-lambda on this job keeps the original
+  # safety value: if the freshly-applied policy still can't InvokeModel,
+  # we refuse to publish a new Lambda version against it.
+
+  aws-preflight-post:
+    name: aws preflight post-apply (IAM simulator)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
+    needs: [terraform-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: IAM policy simulator — Lambda role can invoke Bedrock
+        env:
+          MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
+          LAMBDA_MAIN_NAME: ${{ env.LAMBDA_MAIN_NAME }}
+        run: |
+          set -e
+          ROLE_ARN=$(aws iam get-role --role-name "${LAMBDA_MAIN_NAME}-role" \
+            --query 'Role.Arn' --output text 2>/dev/null || echo "")
+          if [[ -z "$ROLE_ARN" ]]; then
+            echo "::error::${LAMBDA_MAIN_NAME}-role does not exist after terraform-apply — investigate the apply step output."
+            exit 1
+          fi
+          echo "Simulating bedrock:InvokeModel / Converse against $ROLE_ARN"
+          # Try foundation-model ARN first; if that's denied, also try the
+          # inference-profile ARN. At least one must be allowed.
+          FM_ARN="arn:aws:bedrock:${AWS_REGION}::foundation-model/${MODEL_ID}"
+          PROFILE_ARN_PREFIX="arn:aws:bedrock:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):inference-profile/${MODEL_ID}"
+          for arn in "$FM_ARN" "$PROFILE_ARN_PREFIX"; do
+            DECISION=$(aws iam simulate-principal-policy \
+              --policy-source-arn "$ROLE_ARN" \
+              --action-names bedrock:InvokeModel bedrock:Converse \
+              --resource-arns "$arn" \
+              --query 'EvaluationResults[?EvalDecision!=`allowed`].[EvalActionName,EvalDecision]' \
+              --output text 2>/dev/null || echo "ERROR")
+            if [[ -z "$DECISION" ]]; then
+              echo "::notice::IAM allows bedrock:InvokeModel + Converse on $arn"
+              exit 0
+            fi
+            echo "Denied for $arn: $DECISION"
+          done
+          echo "::error::Lambda role lacks bedrock:InvokeModel/Converse on both $FM_ARN and $PROFILE_ARN_PREFIX."
+          echo "::error::Check terraform/main/iam.tf BedrockInvoke statement."
+          exit 1
+
   # --- Lambda deploy: jar → S3 → update-function-code → publish → alias -----
 
   deploy-lambda:
     name: deploy lambda (jar → S3 → alias)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ROLE_ARN != ''
-    needs: [terraform-apply]
+    needs: [terraform-apply, aws-preflight-post]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
