@@ -1560,6 +1560,19 @@ Feature: Scheduling and Orchestration
     Given an operator invokes monitoring-main with {instrument_ids:["abc-123"]}
     Then only that instrument is processed
 
+  Scenario: Only the latest detected bar fires an alert per (instrument, timeframe)
+    Given an instrument with the color_change pattern enabled (min_streak_length=3)
+    And the freshly computed HA chain contains pattern matches on bars t10, t50 and t100
+    When monitoring-main runs
+    Then only the events tied to bar_time = t100 are dispatched
+    And a structured log "main_events_suppressed" reports the count of dropped events
+    Note: protects against bootstrap "alert storms" (a 250-bar first ingest
+    can otherwise emit dozens of stale historical alerts). Multiple distinct
+    patterns matching the same latest bar (e.g. color_change + strong_candle)
+    all fire — only chronologically older bars get dropped. Trade-off: a
+    catch-up run after a Lambda outage loses patterns on intermediate bars;
+    acceptable today, can be relaxed via a MainInput flag later.
+
   Scenario: Manual end-to-end pipeline smoke via force_email
     Given an operator invokes monitoring-main with {force_email:true}
     And no real pattern fires for a tracked (instrument, timeframe)
