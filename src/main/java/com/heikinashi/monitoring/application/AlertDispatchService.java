@@ -163,12 +163,28 @@ public class AlertDispatchService {
                         java.util.Optional.of(component)),
                 now);
         pendingAlerts.enqueue(pending);
-        LOG.info(
-                "alert_enqueued_for_retry instrument_id={} bar_time={} component={} code={}",
+
+        // Diagnostic log: log level ERROR so operators see all retry-queueing
+        // events, with full exception class names + cause chain so it's possible
+        // to tell apart e.g. Bedrock IAM AccessDenied from network failure from
+        // schema parse errors. The PendingAlert.LastError.code (LLM_ERROR for AI
+        // path) stays unchanged so retry semantics aren't affected; sub-stage
+        // (ai_stage / chart_stage / email_stage) goes only into the log line.
+        Throwable rootCause = cause.getCause();
+        LOG.error(
+                "alert_dispatch_failed instrument_id={} bar_time={} component={} stage={} "
+                        + "ex_class={} ex_message={} cause_class={} cause_message={} code={} retry_at={}",
                 event.instrumentId(),
                 event.barTime(),
                 component,
-                pending.lastError().code());
+                DispatchFailureStage.of(component, cause),
+                cause.getClass().getName(),
+                cause.getMessage() == null ? "" : cause.getMessage(),
+                rootCause == null ? "" : rootCause.getClass().getName(),
+                rootCause == null || rootCause.getMessage() == null ? "" : rootCause.getMessage(),
+                pending.lastError().code(),
+                pending.retryAt(),
+                cause);
         return summary.plusQueued();
     }
 
