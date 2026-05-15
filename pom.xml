@@ -440,6 +440,40 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <!--
+                Builds the deployable Lambda fat jar. The Micronaut parent's
+                pluginManagement already configures maven-shade-plugin's
+                `default-shade` execution with the right Main-Class manifest,
+                ServicesResourceTransformer (essential for ServiceLoader-driven
+                Micronaut DI factories), and signing-file filters. Declaring
+                the plugin here is what actually binds that execution to the
+                `package` phase — without it `mvn package` produces only the
+                ~330 KB thin jar and the Lambda fails at startup with
+                NoClassDefFoundError on MicronautRequestHandler.
+
+                shadedArtifactAttached=true keeps the thin jar at
+                target/<artifact>-<version>.jar and produces an additional
+                target/<artifact>-<version>-shaded.jar — the CI deploy job's
+                glob (`target/*-shaded.jar`) selects the latter unambiguously.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-shade</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>shaded</shadedClassifierName>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>
