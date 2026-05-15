@@ -133,9 +133,8 @@ class SesEmailSenderTest {
 
     @Test
     void sendDegraded_calls_ses_with_a_well_formed_raw_message() {
-        // The HTML placeholders ("[Chart unavailable]" / "AI fundamental analysis (unavailable)")
-        // are exercised by EmailBodiesTest. Here we only need to confirm the SES call was made
-        // with a non-empty multipart raw body for each recipient.
+        // The degraded HTML placeholders are exercised by EmailBodiesTest. Here we only need to
+        // confirm the SES call was made with a non-empty multipart raw body for each recipient.
         SesV2Client client = Mockito.mock(SesV2Client.class);
         when(client.sendEmail(any(SendEmailRequest.class)))
                 .thenReturn(SendEmailResponse.builder().messageId("m").build());
