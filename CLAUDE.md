@@ -1001,8 +1001,8 @@ PatternEvent {
   exchange:      String      # denormalized
   timeframe:     String      # "1d" | "1w"
   bar_time:      String      # ISO 8601 UTC
-  pattern:       String      # "color_change" | "strong_candle" | "doji"
-  subtype:       String      # bullish_reversal | bearish_reversal | bullish_strong | bearish_strong | doji
+  pattern:       String      # "color_change" | "strong_candle" | "doji" | "forced" (synthetic, see §10)
+  subtype:       String      # bullish_reversal | bearish_reversal | bullish_strong | bearish_strong | doji | forced
   params_used:   Map         # snapshot of pattern config used
   bar_snapshot:  Map         # ha_open/high/low/close + OHLC values
   detected_at:   String      # ISO 8601 UTC
@@ -1559,6 +1559,17 @@ Feature: Scheduling and Orchestration
   Scenario: Manual one-shot invocation for a single instrument
     Given an operator invokes monitoring-main with {instrument_ids:["abc-123"]}
     Then only that instrument is processed
+
+  Scenario: Manual end-to-end pipeline smoke via force_email
+    Given an operator invokes monitoring-main with {force_email:true}
+    And no real pattern fires for a tracked (instrument, timeframe)
+    Then a synthetic PatternEvent(pattern=FORCED, subtype=FORCED) is built
+      from the latest persisted HA + OHLC bar for that (instrument, timeframe)
+    And chart + AI + email run end-to-end against that event
+    And when no HA bar exists yet, the synthesis is silently skipped with a WARN log
+    Note: FORCED is a synthetic pattern kind, never produced by the detector
+    and never settable via instrument config; it exists only to exercise the
+    dispatch pipeline manually.
 
   Scenario: No active instruments → fast exit
     Given no instruments have status="active"

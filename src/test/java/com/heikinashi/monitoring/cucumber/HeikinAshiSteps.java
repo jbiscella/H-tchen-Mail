@@ -74,6 +74,14 @@ public class HeikinAshiSteps {
         compute_ha_with_full_chain(tfWire);
     }
 
+    @Given("HA has previously been computed on {string} for {string} from the full OHLC chain")
+    public void given_ha_previously_computed_for(String tfWire, String ticker) {
+        Timeframe tf = Timeframe.fromWire(tfWire);
+        Instrument inst = world.repository().findById(world.idByAlias(ticker)).orElseThrow();
+        java.util.List<OHLCBar> all = world.ohlcRepository().listAll(inst.id(), tf);
+        lastHaChain = world.heikinAshiService().computeFor(inst, tf, all);
+    }
+
     // -------- When ------------------------------------------------------------
 
     @When("I compute HA for the active instrument on {string} with those OHLC bars")

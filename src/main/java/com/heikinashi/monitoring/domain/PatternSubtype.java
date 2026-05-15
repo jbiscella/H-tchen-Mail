@@ -6,7 +6,9 @@ public enum PatternSubtype {
     BEARISH_REVERSAL("bearish_reversal"),
     BULLISH_STRONG("bullish_strong"),
     BEARISH_STRONG("bearish_strong"),
-    DOJI("doji");
+    DOJI("doji"),
+    /** Subtype attached to {@link PatternKind#FORCED} synthetic events. */
+    FORCED("forced");
 
     private final String wire;
 

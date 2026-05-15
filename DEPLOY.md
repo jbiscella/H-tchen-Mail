@@ -231,8 +231,42 @@ cat /tmp/out.json
 
 Register your first instrument (until the `mon` CLI lands, do it via a
 direct AWS SDK call against the `monitoring` DynamoDB table, or via a
-manual `aws lambda invoke` with the equivalent payload). The `MainInput`
-shape is `{"instrument_ids": ["<uuid>"]}` for manual one-shot runs.
+manual `aws lambda invoke` with the equivalent payload). The
+`MainInput` shape supports three optional fields:
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `instrument_ids` | `string[]` | absent → all active | Limit the run to listed UUIDs |
+| `force_email` | `boolean` | `false` | For every tracked (instrument, timeframe) without a real pattern, synthesise one `forced/forced` event from the latest persisted bars so chart + AI + email run end-to-end |
+
+End-to-end pipeline smoke (verifies EODHD + Bedrock + SES wiring after
+a deploy, without waiting for an actual pattern):
+
+```bash
+aws lambda invoke \
+  --function-name monitoring-main:live \
+  --payload '{"force_email": true}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/out.json
+```
+
+Scope the smoke to two specific instruments — useful when you only
+want to verify the dispatch path for known UUIDs without paging the
+whole active list (replace the UUIDs with your own):
+
+```bash
+aws lambda invoke \
+  --function-name monitoring-main:live \
+  --payload '{"instrument_ids":["11111111-1111-1111-1111-111111111111","22222222-2222-2222-2222-222222222222"],"force_email":true}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/out.json
+```
+
+Each listed instrument gets one synthetic `forced/forced` event per
+tracked timeframe that produced no real pattern this run, so you
+should receive up to `N × tracked_timeframes` emails (one per
+(instrument, timeframe) combination that has at least one persisted
+HA bar). Combinations with no HA bar yet are silently skipped.
 
 Wait for the 22:00 UTC cron — or invoke manually — and check:
 
@@ -240,7 +274,8 @@ Wait for the 22:00 UTC cron — or invoke manually — and check:
   line `main_run_summary` reports `duration_ms`, `processed`, `sent`,
   etc.
 - **CloudWatch alarms** — should all sit at `OK`.
-- **Your inbox** — an `[HA Alert] …` email when a pattern fires.
+- **Your inbox** — an `[HA Alert] …` email when a pattern fires (or
+  when `force_email: true` was passed).
 
 ---
 

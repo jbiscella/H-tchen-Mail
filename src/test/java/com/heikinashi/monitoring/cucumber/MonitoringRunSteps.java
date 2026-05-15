@@ -38,12 +38,27 @@ public class MonitoringRunSteps {
         world.setLastMainSummary(world.monitoringRunService().execute(MainInput.allActive()));
     }
 
+    @When("I run monitoring-main with force_email true")
+    public void i_run_monitoring_main_with_force_email() {
+        world.setLastMainSummary(
+                world.monitoringRunService().execute(MainInput.allActive().withForceEmail(true)));
+    }
+
     @When("I run monitoring-main for instruments {string}")
     public void i_run_monitoring_main_for_instruments(String csv) {
         Set<String> ids = parseTickers(csv).stream()
                 .map(this::resolveAliasOrPassthrough)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         world.setLastMainSummary(world.monitoringRunService().execute(MainInput.forInstruments(ids)));
+    }
+
+    @When("I run monitoring-main for instruments {string} with force_email true")
+    public void i_run_monitoring_main_for_instruments_with_force_email(String csv) {
+        Set<String> ids = parseTickers(csv).stream()
+                .map(this::resolveAliasOrPassthrough)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        world.setLastMainSummary(world.monitoringRunService()
+                .execute(MainInput.forInstruments(ids).withForceEmail(true)));
     }
 
     private String resolveAliasOrPassthrough(String token) {
