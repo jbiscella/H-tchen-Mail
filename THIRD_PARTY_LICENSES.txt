@@ -1,5 +1,5 @@
 
-Lists of 153 third-party dependencies.
+Lists of 154 third-party dependencies.
      (Apache-2.0) Apache Commons Codec (commons-codec:commons-codec:1.17.1 - https://commons.apache.org/proper/commons-codec/)
      (Apache-2.0) Apache Commons Compress (org.apache.commons:commons-compress:1.26.0 - https://commons.apache.org/proper/commons-compress/)
      (Apache-2.0) Apache Commons Email Core (org.apache.commons:commons-email2-core:2.0.0-M1 - https://commons.apache.org/proper/commons-email/commons-email2-core/)
@@ -148,6 +148,7 @@ Lists of 153 third-party dependencies.
      (BSD) PicoContainer Core (org.picocontainer:picocontainer:2.15 - http://www.picocontainer.org/picocontainer)
      (MIT-0) reactive-streams (org.reactivestreams:reactive-streams:1.0.4 - http://www.reactive-streams.org/)
      (MIT) SLF4J API Module (org.slf4j:slf4j-api:2.0.17 - http://www.slf4j.org)
+     (Apache License, Version 2.0) SnakeYAML (org.yaml:snakeyaml:2.4 - https://bitbucket.org/snakeyaml/snakeyaml)
      (MIT) Testcontainers :: JUnit Jupiter Extension (org.testcontainers:junit-jupiter:1.21.4 - https://java.testcontainers.org)
      (MIT) Testcontainers :: Localstack (org.testcontainers:localstack:1.21.4 - https://java.testcontainers.org)
      (MIT) Testcontainers Core (org.testcontainers:testcontainers:1.21.4 - https://java.testcontainers.org)
