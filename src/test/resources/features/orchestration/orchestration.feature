@@ -81,3 +81,83 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     When I run monitoring-main
     Then the main summary reports the soft timeout was hit
     And the main summary has processed=0
+
+  # ---- force_email: manual smoke escape hatch -----------------------------
+  #
+  # When the payload includes force_email=true, every tracked timeframe
+  # without a real pattern this run gets a synthetic FORCED PatternEvent
+  # built from the latest persisted HA + OHLC bar. Chart + AI + email all
+  # run end-to-end. Useful for ops verification ("can the pipeline send
+  # mail right now?") without waiting for a real pattern to fire.
+
+  Scenario: force_email synthesises one event per tracked timeframe when no real pattern fires
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And the provider has no bars for any symbol
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 1 events detected
+    And the main summary reports 1 alerts sent
+
+  Scenario: force_email does NOT duplicate when a real pattern already fired
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And the color_change pattern is enabled with min_streak_length 3
+    And a previously stored "1d" bar for "AAPL" at "2026-05-01T00:00:00Z"
+    And a previously stored "1d" bar for "AAPL" at "2026-05-02T00:00:00Z"
+    And a previously stored "1d" bar for "AAPL" at "2026-05-03T00:00:00Z"
+    And the provider returns these "1d" bars for "AAPL":
+      | bar_time             | open | high | low | close |
+      | 2026-05-04T00:00:00Z | 100  | 110  | 95  | 105   |
+      | 2026-05-05T00:00:00Z | 106  | 112  | 102 | 110   |
+      | 2026-05-06T00:00:00Z | 110  | 116  | 108 | 114   |
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+
+  Scenario: force_email skips silently when no HA bar exists yet
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And the provider has no bars for any symbol
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 0 events detected
+    And the main summary reports 0 alerts sent
+
+  Scenario: force_email targeted at one instrument doesn't fire for others
+    Given the following instruments exist:
+      | ticker | exchange | status |
+      | AAPL   | NASDAQ   | active |
+      | MSFT   | NASDAQ   | active |
+    And the recipients for "AAPL" are "alice@example.com"
+    And the recipients for "MSFT" are "alice@example.com"
+    And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And a previously stored "1d" bar for "MSFT" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "MSFT" from the full OHLC chain
+    And the provider has no bars for any symbol
+    When I run monitoring-main for instruments "AAPL" with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 1 alerts sent
+
+  Scenario: force_email respects the no-recipients skip
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And the provider has no bars for any symbol
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 1 events detected
+    And the main summary reports 0 alerts sent
+
+  Scenario: Default payload still does not send when no pattern fires
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And the provider has no bars for any symbol
+    When I run monitoring-main
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 0 events detected
+    And the main summary reports 0 alerts sent

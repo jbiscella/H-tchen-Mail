@@ -97,6 +97,10 @@ public class InstrumentConfigService {
                     case COLOR_CHANGE -> patterns.withColorChange(buildColorChange(params, patterns.colorChange()));
                     case STRONG_CANDLE -> patterns.withStrongCandle(buildStrongCandle(params, patterns.strongCandle()));
                     case DOJI -> patterns.withDoji(buildDoji(params, patterns.doji()));
+                    // FORCED is synthetic — fromWire already rejects "forced",
+                    // so this branch is unreachable. Defensive guard for the
+                    // exhaustive switch.
+                    case FORCED -> throw new InvalidPatternConfigException(patternName);
                 };
         InstrumentConfig updated = current.withPatterns(newPatterns, clock.instant());
         repository.updateConfig(id, updated);

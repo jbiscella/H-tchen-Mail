@@ -163,6 +163,8 @@ public final class World {
                 heikinAshiService,
                 patternDetectionService,
                 alertDispatchService,
+                ohlcRepository,
+                haRepository,
                 clock,
                 runConfig);
     }
