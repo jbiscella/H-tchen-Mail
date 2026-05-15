@@ -40,7 +40,15 @@ data "aws_iam_policy_document" "lambda_perms" {
     ]
   }
 
-  # Bedrock invocation on the configured model.
+  # Bedrock invocation.
+  #
+  # Cross-region inference profiles (e.g. eu.anthropic.claude-opus-4-7) route
+  # InvokeModel to a foundation-model ARN in whichever region within the
+  # profile has capacity. The Lambda role therefore needs InvokeModel on
+  # BOTH the inference-profile ARN AND every potential underlying
+  # foundation-model ARN across regions. Without the second leg the call
+  # fails with AccessDeniedException even when the profile-level permission
+  # itself is granted.
   statement {
     sid    = "BedrockInvoke"
     effect = "Allow"
@@ -50,9 +58,18 @@ data "aws_iam_policy_document" "lambda_perms" {
       "bedrock:ConverseStream",
     ]
     resources = [
+      # Single-region foundation-model ARN (when bedrock_model_id is a raw
+      # model id like "anthropic.claude-haiku-4-5-20251001-v1:0").
       "arn:aws:bedrock:${var.region}::foundation-model/${var.bedrock_model_id}",
-      # Inference profiles for the same model — used in some accounts.
+      # Inference profile in the home region. Wildcard on the profile id so
+      # switching to a different profile (e.g. eu.anthropic.claude-opus-4-7)
+      # is a config change, not an IAM change.
       "arn:aws:bedrock:${var.region}:${local.account_id}:inference-profile/*",
+      # Underlying foundation-model ARNs the inference profile may route to.
+      # Region wildcard because EU profiles fan out across eu-central-1 /
+      # eu-west-1 / eu-west-3 / eu-north-1. Scoped to anthropic.* so this
+      # isn't a blanket bedrock:InvokeModel.
+      "arn:aws:bedrock:*::foundation-model/anthropic.*",
     ]
   }
 

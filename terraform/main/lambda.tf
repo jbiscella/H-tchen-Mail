@@ -52,6 +52,7 @@ resource "aws_lambda_function" "main" {
       MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
       MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
       MONITORING_EODHD_API_KEY      = var.eodhd_api_key
+      MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
     }
   }
 
@@ -118,6 +119,7 @@ resource "aws_lambda_function" "retry" {
       MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
       MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
       MONITORING_EODHD_API_KEY      = var.eodhd_api_key
+      MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
     }
   }
 
