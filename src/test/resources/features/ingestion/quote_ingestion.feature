@@ -187,9 +187,9 @@ Feature: Block 3 — Quote ingestion via the market-data port
       | A      | NYSE     | active |
       | A      | XETRA    | active |
       | A      | LSE      | active |
-    And the provider raises a "provider_unavailable" error for symbol "A"
-    And the provider raises a "provider_unavailable" error for symbol "A.DE"
-    And the provider raises a "provider_unavailable" error for symbol "A.L"
+    And the provider raises a "provider_unavailable" error for symbol "A.US"
+    And the provider raises a "provider_unavailable" error for symbol "A.XETRA"
+    And the provider raises a "provider_unavailable" error for symbol "A.LSE"
     When I run ingest_all_active
     Then the ingestion summary has processed=4, succeeded=0, failed=4
 

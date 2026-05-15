@@ -116,12 +116,16 @@ public final class World {
                 0.5,
                 Map.of(Timeframe.D1, 250, Timeframe.W1, 260),
                 Map.of(
+                        "NASDAQ", ".US",
+                        "NYSE", ".US",
                         "MIL", ".MI",
-                        "XETRA", ".DE",
-                        "LSE", ".L",
+                        "XETRA", ".XETRA",
+                        "LSE", ".LSE",
                         "TSX", ".TO",
                         "PAR", ".PA",
-                        "AMS", ".AS"));
+                        "AMS", ".AS",
+                        "SWX", ".SW",
+                        "BME", ".MC"));
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
         heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
         patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
