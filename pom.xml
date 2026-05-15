@@ -92,6 +92,19 @@
             <groupId>io.micronaut.validation</groupId>
             <artifactId>micronaut-validation</artifactId>
         </dependency>
+        <!--
+            SnakeYAML — runtime dep required by Micronaut's YamlPropertySourceLoader
+            to parse application.yml. The loader CLASS ships with micronaut-context,
+            but SnakeYAML itself is an optional dep that we have to pull in
+            explicitly. Without it, application.yml is in the jar but never parsed,
+            and every @Value placeholder fails with "Property doesn't exist".
+            Version is managed by micronaut-parent (2.4 at time of writing).
+        -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- Lambda runtime -->
         <dependency>
