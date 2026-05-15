@@ -370,6 +370,7 @@
                         <exclude>com/heikinashi/monitoring/infrastructure/email/Ses*</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/eodhd/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/marketaux/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/yahoo/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/chart/**</exclude>
                         <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
                     </excludes>

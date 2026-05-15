@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
+import com.heikinashi.monitoring.infrastructure.news.NewsProvider;
 import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.net.URI;
@@ -31,7 +32,7 @@ import org.slf4j.LoggerFactory;
  * entity matcher accepts that form for both US and non-US listings.
  */
 @Singleton
-public class MarketauxNewsProvider {
+public class MarketauxNewsProvider implements NewsProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(MarketauxNewsProvider.class);
     private static final String PROVIDER = "marketaux";
@@ -48,6 +49,12 @@ public class MarketauxNewsProvider {
                 .build();
     }
 
+    @Override
+    public String name() {
+        return PROVIDER;
+    }
+
+    @Override
     public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
         String symbol = ticker + "." + exchange;
         URI uri = buildUri(symbol, max);
@@ -70,8 +77,6 @@ public class MarketauxNewsProvider {
 
         long elapsed = System.currentTimeMillis() - t0;
         int status = response.statusCode();
-        int bodyLen = response.body() == null ? 0 : response.body().length();
-        LOG.info("marketaux_call symbol={} status={} bytes={} duration_ms={}", symbol, status, bodyLen, elapsed);
 
         if (status == 401 || status == 403) {
             throw new ProviderUnavailableException(
@@ -87,7 +92,15 @@ public class MarketauxNewsProvider {
             throw new ProviderUnavailableException(PROVIDER, new RuntimeException("unexpected status: " + status));
         }
 
-        return parseNews(response.body(), max);
+        List<NewsHeadline> headlines = parseNews(response.body(), max);
+        LOG.info(
+                "news_call provider={} symbol={} status={} duration_ms={} count={}",
+                PROVIDER,
+                symbol,
+                status,
+                elapsed,
+                headlines.size());
+        return headlines;
     }
 
     private URI buildUri(String symbol, int max) {
@@ -118,7 +131,10 @@ public class MarketauxNewsProvider {
             if (out.size() >= max) {
                 break;
             }
-            if (!article.hasNonNull("title") || !article.hasNonNull("published_at") || !article.hasNonNull("source")) {
+            if (!article.hasNonNull("title")
+                    || !article.hasNonNull("published_at")
+                    || !article.hasNonNull("source")
+                    || !article.hasNonNull("url")) {
                 LOG.debug("marketaux_skipping_article reason=missing_field");
                 continue;
             }
@@ -127,7 +143,8 @@ public class MarketauxNewsProvider {
                 out.add(new NewsHeadline(
                         article.get("title").asText(),
                         publishedAt,
-                        article.get("source").asText()));
+                        article.get("source").asText(),
+                        article.get("url").asText()));
             } catch (RuntimeException e) {
                 LOG.debug("marketaux_skipping_article reason=unparsable published_at");
             }
