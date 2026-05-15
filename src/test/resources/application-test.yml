@@ -14,3 +14,5 @@ monitoring:
     sender-email: alerts@test.local
   eodhd:
     api-key: test-token
+  marketaux:
+    api-key: test-token

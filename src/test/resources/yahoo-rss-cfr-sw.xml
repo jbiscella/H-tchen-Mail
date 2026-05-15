@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Yahoo! Finance: CFR.SW News</title>
+    <link>https://finance.yahoo.com/quote/CFR.SW</link>
+    <description>Latest news for CFR.SW</description>
+    <item>
+      <title>Richemont shares climb after upbeat jewellery update</title>
+      <link>https://finance.yahoo.com/news/richemont-shares-climb-0001.html</link>
+      <pubDate>Thu, 14 May 2026 07:10:00 +0000</pubDate>
+      <guid>richemont-0001</guid>
+    </item>
+    <item>
+      <title>Swiss luxury names in focus ahead of guidance</title>
+      <link>https://finance.yahoo.com/news/swiss-luxury-focus-0002.html</link>
+      <pubDate>Wed, 13 May 2026 16:00:00 +0000</pubDate>
+      <guid>richemont-0002</guid>
+    </item>
+    <item>
+      <title>Watch sector sales recover as tourism returns</title>
+      <link>https://finance.yahoo.com/news/watch-sector-sales-0003.html</link>
+      <pubDate>Tue, 12 May 2026 10:45:00 +0000</pubDate>
+      <guid>richemont-0003</guid>
+    </item>
+  </channel>
+</rss>

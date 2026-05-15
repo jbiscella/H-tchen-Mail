@@ -14,6 +14,11 @@ monitoring:
     # populated from the EODHD_KEY GitHub secret). No default — boot fails fast if missing.
     base-url: https://eodhd.com/api
     timeout-seconds: 10
+  marketaux:
+    # api-key is set via the MONITORING_MARKETAUX_API_KEY env var (terraform/main/lambda.tf,
+    # populated from the MARKETAUX_KEY GitHub secret). No default — boot fails fast if missing.
+    base-url: https://api.marketaux.com/v1
+    timeout-seconds: 10
   bootstrap:
     size-1d: 250
     size-1w: 260
@@ -23,6 +28,15 @@ monitoring:
     # NASDAQ + NYSE + ARCA + OTC, and ".LSE" / ".XETRA" (not the Yahoo
     # ".L" / ".DE") for London and Frankfurt.
     suffix-map: '{"NASDAQ":".US","NYSE":".US","MIL":".MI","XETRA":".XETRA","LSE":".LSE","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
+    # Yahoo Finance ticker suffix per exchange — differs from EODHD's: Yahoo
+    # uses no suffix for US, ".L" for London, ".DE" for Frankfurt.
+    yahoo-suffix-map: '{"NASDAQ":"","NYSE":"","MIL":".MI","XETRA":".DE","LSE":".L","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
+  news:
+    # News adapters to query and merge. Remove an entry to disable a provider
+    # without deleting its code.
+    providers:
+      - marketaux
+      - yahoo-rss
   ingest:
     circuit-breaker:
       threshold: 3
