@@ -250,6 +250,24 @@ aws lambda invoke \
   /tmp/out.json
 ```
 
+Scope the smoke to two specific instruments — useful when you only
+want to verify the dispatch path for known UUIDs without paging the
+whole active list (replace the UUIDs with your own):
+
+```bash
+aws lambda invoke \
+  --function-name monitoring-main:live \
+  --payload '{"instrument_ids":["11111111-1111-1111-1111-111111111111","22222222-2222-2222-2222-222222222222"],"force_email":true}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/out.json
+```
+
+Each listed instrument gets one synthetic `forced/forced` event per
+tracked timeframe that produced no real pattern this run, so you
+should receive up to `N × tracked_timeframes` emails (one per
+(instrument, timeframe) combination that has at least one persisted
+HA bar). Combinations with no HA bar yet are silently skipped.
+
 Wait for the 22:00 UTC cron — or invoke manually — and check:
 
 - **CloudWatch Logs** `/aws/lambda/monitoring-main` — the JSON summary
