@@ -48,10 +48,8 @@ resource "aws_lambda_function" "main" {
 
   environment {
     variables = {
-      LOG_LEVEL                       = "INFO"
-      MONITORING_TABLE                = aws_dynamodb_table.monitoring.name
-      MONITORING_EXCHANGES_SUPPORTED  = local.supported_exchanges_csv
-      MONITORING_EXCHANGES_SUFFIX_MAP = local.exchange_suffix_map_json
+      LOG_LEVEL        = "INFO"
+      MONITORING_TABLE = aws_dynamodb_table.monitoring.name
     }
   }
 
@@ -114,10 +112,8 @@ resource "aws_lambda_function" "retry" {
 
   environment {
     variables = {
-      LOG_LEVEL                       = "INFO"
-      MONITORING_TABLE                = aws_dynamodb_table.monitoring.name
-      MONITORING_EXCHANGES_SUPPORTED  = local.supported_exchanges_csv
-      MONITORING_EXCHANGES_SUFFIX_MAP = local.exchange_suffix_map_json
+      LOG_LEVEL        = "INFO"
+      MONITORING_TABLE = aws_dynamodb_table.monitoring.name
     }
   }
 
