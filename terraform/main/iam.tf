@@ -74,6 +74,13 @@ data "aws_iam_policy_document" "lambda_perms" {
   }
 
   # SES v2 sendEmail / SendRawEmail on the verified identity.
+  #
+  # SES authorises against whichever identity it considers most specific
+  # for the From address. When both an email identity (noreply@example.com)
+  # and a domain identity (example.com) are verified, SES checks against
+  # the DOMAIN identity for sub-addresses — so we have to grant the action
+  # on both ARNs, not just the email identity, or SendRawEmail returns
+  # AccessDeniedException with a resource pointing at identity/<domain>.
   statement {
     sid    = "SESSend"
     effect = "Allow"
@@ -83,6 +90,7 @@ data "aws_iam_policy_document" "lambda_perms" {
     ]
     resources = [
       "arn:aws:ses:${var.ses_region}:${local.account_id}:identity/${var.ses_sender_email}",
+      "arn:aws:ses:${var.ses_region}:${local.account_id}:identity/${split("@", var.ses_sender_email)[1]}",
     ]
   }
 
