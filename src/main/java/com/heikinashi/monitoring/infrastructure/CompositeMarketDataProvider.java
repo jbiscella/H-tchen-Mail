@@ -5,7 +5,7 @@ import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import com.heikinashi.monitoring.infrastructure.eodhd.EodhdMarketDataProvider;
-import com.heikinashi.monitoring.infrastructure.marketaux.MarketauxNewsProvider;
+import com.heikinashi.monitoring.infrastructure.news.NewsAggregator;
 import io.micronaut.context.annotation.Primary;
 import jakarta.inject.Singleton;
 import java.time.Instant;
@@ -13,10 +13,11 @@ import java.util.List;
 
 /**
  * The {@link MarketDataProvider} the rest of the app injects. Composes the
- * single-purpose adapters: OHLC history from EODHD, news headlines from
- * Marketaux. The remaining fundamentals methods (quote info, earnings,
- * recommendations, financials, insider transactions) keep the interface's
- * empty defaults — no provider implements them yet.
+ * single-purpose adapters: OHLC history from EODHD, news headlines from the
+ * {@link NewsAggregator} (which fans out across Marketaux + Yahoo RSS). The
+ * remaining fundamentals methods (quote info, earnings, recommendations,
+ * financials, insider transactions) keep the interface's empty defaults — no
+ * provider implements them yet.
  *
  * <p>{@code @Primary} resolves the injection ambiguity with
  * {@link EodhdMarketDataProvider}, which is also a {@code MarketDataProvider}
@@ -27,9 +28,9 @@ import java.util.List;
 public class CompositeMarketDataProvider implements MarketDataProvider {
 
     private final EodhdMarketDataProvider history;
-    private final MarketauxNewsProvider news;
+    private final NewsAggregator news;
 
-    public CompositeMarketDataProvider(EodhdMarketDataProvider history, MarketauxNewsProvider news) {
+    public CompositeMarketDataProvider(EodhdMarketDataProvider history, NewsAggregator news) {
         this.history = history;
         this.news = news;
     }

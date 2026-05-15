@@ -28,6 +28,7 @@ class MarketauxNewsProviderTest {
         NewsHeadline first = news.get(0);
         assertThat(first.title()).isEqualTo("Richemont posts record full-year sales on jewellery demand");
         assertThat(first.source()).isEqualTo("reuters.com");
+        assertThat(first.url()).isEqualTo("https://example.com/news/richemont-record-sales");
         assertThat(first.publishedAt()).isEqualTo(Instant.parse("2026-05-14T06:30:00Z"));
     }
 
@@ -46,7 +47,9 @@ class MarketauxNewsProviderTest {
     @Test
     void article_missing_required_fields_is_skipped_not_fatal() {
         String body = "{\"data\":[{\"title\":\"only a title\"},"
-                + "{\"title\":\"ok\",\"published_at\":\"2026-05-14T06:30:00Z\",\"source\":\"x.com\"}]}";
+                + "{\"title\":\"no url\",\"published_at\":\"2026-05-14T06:30:00Z\",\"source\":\"x.com\"},"
+                + "{\"title\":\"ok\",\"published_at\":\"2026-05-14T06:30:00Z\",\"source\":\"x.com\","
+                + "\"url\":\"https://x.com/ok\"}]}";
         List<NewsHeadline> news = MarketauxNewsProvider.parseNews(body, 10);
         assertThat(news).hasSize(1);
         assertThat(news.get(0).title()).isEqualTo("ok");
@@ -54,7 +57,8 @@ class MarketauxNewsProviderTest {
 
     @Test
     void article_with_unparsable_date_is_skipped() {
-        String body = "{\"data\":[{\"title\":\"bad date\",\"published_at\":\"not-a-date\",\"source\":\"x.com\"}]}";
+        String body = "{\"data\":[{\"title\":\"bad date\",\"published_at\":\"not-a-date\","
+                + "\"source\":\"x.com\",\"url\":\"https://x.com/bad\"}]}";
         assertThat(MarketauxNewsProvider.parseNews(body, 10)).isEmpty();
     }
 
