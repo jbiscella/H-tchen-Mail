@@ -9,7 +9,7 @@ first so they're done by the time you need them.
 | [`CLAUDE.md`](CLAUDE.md) §12 | High-level pre-deploy checklist (12 rows) |
 | [`terraform/bootstrap/README.md`](terraform/bootstrap/README.md) | Bootstrap stack details |
 | [`terraform/main/README.md`](terraform/main/README.md) | Main stack architecture + code-vs-shape deploy model |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) `env:` | Authoritative list of repo Variables the workflow consumes |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) `env:` | Authoritative list of the repo secrets + variables the workflow consumes |
 
 ---
 
@@ -79,10 +79,14 @@ git clone git@github.com:jbiscella/H-tchen-Mail.git
 cd H-tchen-Mail
 ```
 
-If you're deploying under a **different** GitHub repo, edit
+**Deploying to your own AWS account?** Fork the repo on GitHub first,
+then clone your fork. Everything in this runbook works unchanged on a
+fork — the only repo-specific edit is the OIDC trust pin: edit
 `terraform/bootstrap/variables.tf` `github_repository` (default
-`jbiscella/H-tchen-Mail`) before applying — the OIDC trust policy pins
-to that repo.
+`jbiscella/H-tchen-Mail`) to your `owner/repo` before applying the
+bootstrap stack, so AWS only trusts *your* fork to assume the deploy
+role. The rest is configuration you supply through GitHub secrets and
+variables in §4 — no other code changes.
 
 ---
 
@@ -108,36 +112,64 @@ terraform output -json > bootstrap-outputs.json
 
 | Output | Where it goes |
 |---|---|
-| `deploy_role_arn` | GitHub repo variable `DEPLOY_ROLE_ARN` |
-| `state_bucket_name` | GitHub variable `TF_STATE_BUCKET` (default `monitoring-tfstate`) |
-| `lock_table_name` | GitHub variable `TF_LOCK_TABLE` (default `monitoring-tflock`) |
+| `deploy_role_arn` | GitHub repo **secret** `DEPLOY_ROLE_ARN` |
+| `state_bucket_name` | GitHub repo **secret** `TF_STATE_BUCKET` |
+| `lock_table_name` | GitHub repo **variable** `TF_LOCK_TABLE` (default `monitoring-tflock`) |
 
 See [`terraform/bootstrap/README.md`](terraform/bootstrap/README.md) for
 the full output reference and trust-policy details.
 
 ---
 
-## 4. Configure GitHub repo variables
+## 4. Configure GitHub repo secrets and variables
 
-GitHub repo → Settings → Secrets and variables → Actions → **Variables**
-tab → **New repository variable**.
+GitHub repo → Settings → Secrets and variables → Actions.
+
+The deploy configuration is split in two. Values that identify a
+specific AWS account go in **Secrets** so they're masked in workflow
+logs; non-sensitive knobs go in **Variables**.
+
+### Secrets
+
+Secrets tab → **New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_ROLE_ARN` | `deploy_role_arn` from the bootstrap output |
+| `TF_STATE_BUCKET` | `state_bucket_name` from the bootstrap output |
+| `ARTIFACTS_BUCKET` | artifacts bucket name — S3 names are **globally unique**, so pick something like `monitoring-artifacts-<account-id>` |
+| `EODHD_KEY` | your [EODHD](https://eodhd.com) API token (OHLC history) |
+| `MARKETAUX_KEY` | your [Marketaux](https://www.marketaux.com) API token (news) |
+
+Secrets have no defaults: if one is missing, the job that needs it
+fails loudly rather than deploying to the wrong place.
+
+### Variables
+
+Variables tab → **New repository variable**:
 
 | Variable | Value |
 |---|---|
-| `DEPLOY_ROLE_ARN` | from bootstrap output |
-| `AWS_REGION` | `eu-central-1` |
-| `TF_STATE_BUCKET` | `monitoring-tfstate` |
+| `DEPLOY_ENABLED` | `true` — master switch for the AWS-touching jobs (see below) |
+| `AWS_REGION` | e.g. `eu-central-1` |
 | `TF_LOCK_TABLE` | `monitoring-tflock` |
-| `ARTIFACTS_BUCKET` | `monitoring-artifacts-<unique-suffix>` — S3 names are **globally unique**; pick something like `monitoring-artifacts-<account-id>` or `monitoring-artifacts-<your-org>` |
 | `LAMBDA_MAIN_NAME` | `monitoring-main` |
 | `LAMBDA_RETRY_NAME` | `retry-poller` |
+| `SES_SENDER_EMAIL` | the sender address you verified in §1.2 |
+| `BEDROCK_MODEL_ID` | the model / inference-profile id you have access to |
 
-Anything left blank falls through to `.github/workflows/ci.yml`'s `env:`
-defaults, but setting them explicitly keeps the workflow account-aware.
+Variables left unset fall through to the `env:` defaults in
+`.github/workflows/ci.yml`.
 
-All AWS-touching jobs gate on `vars.DEPLOY_ROLE_ARN != ''` — if you fork
-the repo and don't set the role, only `mvn verify` + `terraform
-fmt + validate` run.
+### The `DEPLOY_ENABLED` gate
+
+Every AWS-touching job (`terraform-plan`, `aws-preflight-*`,
+`terraform-apply`, `deploy-lambda`) runs only when the `DEPLOY_ENABLED`
+variable is exactly the string `true`. On a fresh fork it's unset, so
+only `mvn verify` and `terraform fmt + validate` run — you can push and
+open PRs with no AWS account wired up at all. Flip `DEPLOY_ENABLED` to
+`true` once the bootstrap stack is applied and the five secrets above
+are set.
 
 ---
 
@@ -287,8 +319,8 @@ Wait for the 22:00 UTC cron — or invoke manually — and check:
 | `terraform-apply` fails with `BucketAlreadyExists` on the artifacts bucket | `ARTIFACTS_BUCKET` clashes with a globally-existing S3 bucket name. Pick something more unique (e.g. include your account id). |
 | Lambda 5xx at first invoke | Sender email in SSM doesn't match the verified SES identity. Re-run §5. |
 | Bedrock returns `AccessDeniedException` in the AI section of an alert email | §1.3 wasn't completed for the configured model. Request access. |
-| `terraform apply` fails on backend init | Bootstrap stack wasn't applied, or `TF_STATE_BUCKET` / `TF_LOCK_TABLE` repo variables are wrong. |
-| Workflow skips the AWS-touching jobs | `DEPLOY_ROLE_ARN` repo variable is empty. |
+| `terraform apply` fails on backend init | Bootstrap stack wasn't applied, or the `TF_STATE_BUCKET` secret / `TF_LOCK_TABLE` variable is wrong. |
+| Workflow skips the AWS-touching jobs | `DEPLOY_ENABLED` variable is not set to `true`. |
 | Push to `main` rejected | Branch protection requires PR. Open a PR and merge. |
 
 ---
