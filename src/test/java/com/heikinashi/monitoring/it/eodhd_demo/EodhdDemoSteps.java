@@ -25,9 +25,10 @@ import org.junit.jupiter.api.Assumptions;
 /**
  * Cucumber glue for the EODHD demo-key smoke feature. Wires up the real
  * {@link EodhdMarketDataProvider} pointing at {@code https://eodhd.com/api}
- * with {@code api_token=demo}. The hook in {@link #skipIfUnreachable()}
- * pings the endpoint once per scenario and {@link Assumptions#assumeTrue}
- * aborts (skips, not fails) when the network can't reach it.
+ * with {@code api_token=demo}. The hook in
+ * {@link #skipUnlessExplicitlyEnabled()} gates on a system property /
+ * environment variable so this network-dependent IT stays opt-in — CI
+ * runs default-skip, devs that want the smoke flip the flag.
  */
 public final class EodhdDemoSteps {
 
@@ -40,8 +41,22 @@ public final class EodhdDemoSteps {
     private Throwable lastError;
 
     @Before("@network")
-    public void skipIfUnreachable() {
-        Assumptions.assumeTrue(eodhdReachable(), "EODHD endpoint not reachable; skipping network smoke test");
+    public void skipUnlessExplicitlyEnabled() {
+        // Opt-in only. The demo key has a stale data cutoff (no fresh "last
+        // 30 days" bars), unpredictable rate limiting (shared globally across
+        // EODHD demo users), and a partially-known symbol whitelist. Failing
+        // CI on those quirks isn't useful — devs that want the smoke run
+        // enable it explicitly:
+        //   mvn verify -Deodhd.demo.enabled=true
+        //   EODHD_DEMO_ENABLED=true mvn verify
+        boolean enabled = "true".equalsIgnoreCase(System.getProperty("eodhd.demo.enabled"))
+                || "true".equalsIgnoreCase(System.getenv("EODHD_DEMO_ENABLED"));
+        Assumptions.assumeTrue(enabled, "EODHD demo smoke disabled; set -Deodhd.demo.enabled=true to run");
+
+        // Even when enabled, skip cleanly if the runner can't reach EODHD
+        // (offline laptop, network-restricted CI, L7 proxy).
+        Assumptions.assumeTrue(eodhdReachable(), "EODHD endpoint not reachable; skipping");
+
         EodhdConfig cfg = new EodhdConfig();
         cfg.setApiKey(DEMO_KEY);
         cfg.setBaseUrl(BASE_URL);
@@ -52,9 +67,6 @@ public final class EodhdDemoSteps {
     }
 
     private static boolean eodhdReachable() {
-        // TCP-level reachability isn't enough: some networks let the connect
-        // through but the L7 proxy returns 4xx without ever touching EODHD.
-        // Probe the public homepage (no quota cost) and require a real 2xx/3xx.
         try {
             HttpClient probe = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(2))
