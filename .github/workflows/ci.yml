@@ -25,6 +25,9 @@ env:
   TF_VERSION: '1.15.2'
   LAMBDA_MAIN_NAME: ${{ vars.LAMBDA_MAIN_NAME || 'monitoring-main' }}
   LAMBDA_RETRY_NAME: ${{ vars.LAMBDA_RETRY_NAME || 'retry-poller' }}
+  TF_VAR_artifacts_bucket_name: ${{ vars.ARTIFACTS_BUCKET || 'monitoring-artifacts' }}
+  TF_VAR_ses_sender_email: ${{ vars.SES_SENDER_EMAIL || 'noreply@biscella.com' }}
+  TF_VAR_bedrock_model_id: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
 
 jobs:
   # --- Build + tests --------------------------------------------------------

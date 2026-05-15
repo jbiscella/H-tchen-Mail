@@ -3,7 +3,7 @@
 # and then aws lambda update-function-code points the alias at it.
 
 resource "aws_s3_bucket" "artifacts" {
-  bucket = "monitoring-artifacts"
+  bucket = var.artifacts_bucket_name
 }
 
 resource "aws_s3_bucket_public_access_block" "artifacts" {
