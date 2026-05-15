@@ -69,16 +69,31 @@ class EmailBodiesTest {
         String html = EmailBodies.html(EVENT, Optional.of("img-1"), Optional.of(ANALYSIS), AlertEnrichment.FULL);
         assertThat(html).contains("<img src=\"cid:img-1\"");
         assertThat(html).contains("AAPL.NASDAQ");
-        assertThat(html).contains("color_change / bullish_reversal");
-        assertThat(html).contains("AI fundamental analysis (confidence: MEDIUM)");
+        assertThat(html).contains("Heikin-Ashi pattern detected.");
+        assertThat(html).contains("--pattern=color_change/bullish_reversal");
+        assertThat(html).contains("// corroborating");
+        assertThat(html).contains("Earnings momentum supports the signal.");
+        assertThat(html).contains("FUNDAMENTAL CONFIDENCE");
+        assertThat(html).contains("MEDIUM");
+        assertThat(html).contains("enrichment full");
     }
 
     @Test
     void html_body_without_chart_emits_unavailable_placeholder() {
         String html = EmailBodies.html(EVENT, Optional.empty(), Optional.empty(), AlertEnrichment.DEGRADED_BOTH);
         assertThat(html).doesNotContain("<img");
-        assertThat(html).contains("[Chart unavailable] Pattern: bullish_reversal");
-        assertThat(html).contains("AI fundamental analysis (unavailable)");
-        assertThat(html).contains("Enrichment: degraded_both");
+        assertThat(html).contains("chart unavailable");
+        assertThat(html).contains("// fundamental analysis");
+        assertThat(html).contains("AI fundamental analysis unavailable for this alert.");
+        assertThat(html).contains("enrichment degraded_both");
+    }
+
+    @Test
+    void html_body_escapes_dynamic_text_from_the_ai_analysis() {
+        AiAnalysis hostile = new AiAnalysis(
+                Optional.of("danger <script>alert(1)</script> & co"), Optional.empty(), AiConfidence.LOW, List.of());
+        String html = EmailBodies.html(EVENT, Optional.of("img-1"), Optional.of(hostile), AlertEnrichment.FULL);
+        assertThat(html).doesNotContain("<script>");
+        assertThat(html).contains("&lt;script&gt;");
     }
 }
