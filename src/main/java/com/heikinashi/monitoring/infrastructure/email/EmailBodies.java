@@ -101,7 +101,15 @@ final class EmailBodies {
         String detTime = event.detectedAt().toString().substring(11, 16);
 
         StringBuilder sb = new StringBuilder(4096);
-        sb.append("<html><body style=\"margin:0;padding:24px 0;background:")
+        // Force a light render: the meta tags + color-scheme tell clients
+        // that honour them (Apple Mail, most webmail) not to dark-mode-invert.
+        // Gmail's Android dark mode may still invert — there is no reliable
+        // defence there — but the design stays light everywhere else.
+        sb.append("<html><head>")
+                .append("<meta name=\"color-scheme\" content=\"light\">")
+                .append("<meta name=\"supported-color-schemes\" content=\"light\">")
+                .append("<style>:root{color-scheme:light only;supported-color-schemes:light;}</style>")
+                .append("</head><body style=\"margin:0;padding:24px 0;background:")
                 .append(CREAM)
                 .append(";\">");
         sb.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:")
