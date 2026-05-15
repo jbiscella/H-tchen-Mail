@@ -77,7 +77,7 @@ CLAUDE.md §14:
 | Variable                       | Default                                           |
 |--------------------------------|---------------------------------------------------|
 | `region`                       | `eu-central-1`                                    |
-| `ses_region`                   | `eu-south-1`                                      |
+| `ses_region`                   | `eu-central-1`                                    |
 | `lambda_runtime`               | `java25`                                          |
 | `lambda_memory_mb`             | `1024`                                            |
 | `lambda_main_timeout_seconds`  | `900`                                             |
