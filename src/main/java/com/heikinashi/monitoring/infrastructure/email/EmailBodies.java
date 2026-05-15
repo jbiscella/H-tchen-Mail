@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.email;
 
 import com.heikinashi.monitoring.domain.AiAnalysis;
+import com.heikinashi.monitoring.domain.AiConfidence;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import java.math.BigDecimal;
@@ -77,81 +78,253 @@ final class EmailBodies {
         return sb.toString();
     }
 
+    // --- "Quiet terminal" HTML theme (palette + metrics from the design) -
+    private static final String INK = "#1A1814"; // rgb(26,24,20)   primary text
+    private static final String MUTED = "#6E6961"; // rgb(110,105,97) labels, lede
+    private static final String BODY = "#3A3530"; // rgb(58,53,48)   analysis prose
+    private static final String FAINT = "#8A857C"; // rgb(138,133,124) footer
+    private static final String ACCENT = "#A04030"; // rgb(160,64,48)  terracotta
+    private static final String CREAM = "#F4F1EA"; // page background
+    private static final String RULE = "#D9D2C3"; // rgb(217,210,195) hairlines
+    private static final String MONO = "font-family:'Courier New',Courier,monospace;";
+    private static final String SANS = "font-family:Helvetica,Arial,sans-serif;";
+
     static String html(
             PatternEvent event, Optional<String> chartCid, Optional<AiAnalysis> analysis, AlertEnrichment enrichment) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<html><body style=\"font-family: -apple-system, sans-serif; max-width: 600px;\">");
-        sb.append("<h2>Heikin Ashi Pattern Detected</h2>");
-        sb.append("<p><b>")
-                .append(event.ticker())
-                .append('.')
-                .append(event.exchange())
-                .append("</b> — ")
-                .append(event.pattern().wire())
-                .append(" / ")
-                .append(event.subtype().wire())
-                .append(" on ")
-                .append(event.timeframe().wire())
-                .append(" (")
-                .append(event.barTime().toString(), 0, 10)
-                .append(")</p>");
+        String tickerInk =
+                "<span style=\"color:" + INK + ";\">" + esc(event.ticker()) + "." + esc(event.exchange()) + "</span>";
+        String ticker = esc(event.ticker()) + "." + esc(event.exchange());
+        String pat = esc(event.pattern().wire()) + "/" + esc(event.subtype().wire());
+        String tf = esc(event.timeframe().wire());
+        String barDate = event.barTime().toString().substring(0, 10);
+        String detDate = event.detectedAt().toString().substring(0, 10);
+        String detTime = event.detectedAt().toString().substring(11, 16);
 
+        StringBuilder sb = new StringBuilder(4096);
+        sb.append("<html><body style=\"margin:0;padding:24px 0;background:")
+                .append(CREAM)
+                .append(";\">");
+        sb.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:")
+                .append(CREAM)
+                .append(";\"><tr><td align=\"center\">");
+        sb.append("<table role=\"presentation\" width=\"640\" cellpadding=\"0\" cellspacing=\"0\" "
+                + "style=\"max-width:640px;background:#FFFFFF;\"><tr><td style=\"padding:40px 44px 36px;\">");
+
+        // Header: brand + timestamp (11px mono, muted).
+        sb.append("<table role=\"presentation\" width=\"100%\"><tr><td style=\"")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">biscella.signals</td><td align=\"right\" style=\"")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">")
+                .append(detDate)
+                .append(" &middot; ")
+                .append(detTime)
+                .append(" UTC</td></tr></table>");
+        sb.append(rule());
+
+        // Terminal command line (13px mono; $ in accent, rest ink).
+        sb.append("<div style=\"")
+                .append(MONO)
+                .append("font-size:13px;color:")
+                .append(INK)
+                .append(";\"><span style=\"color:")
+                .append(ACCENT)
+                .append(";\">$</span> ha-alert --symbol=")
+                .append(ticker)
+                .append(" --pattern=")
+                .append(pat)
+                .append(" --tf=")
+                .append(tf)
+                .append("</div>");
+        sb.append(rule());
+
+        // Heading + lede (Helvetica).
+        sb.append("<div style=\"")
+                .append(SANS)
+                .append("font-size:26px;font-weight:700;letter-spacing:-0.4px;line-height:30px;color:")
+                .append(INK)
+                .append(";padding:14px 0 6px;\">Heikin-Ashi pattern detected.</div>");
+        sb.append("<div style=\"")
+                .append(SANS)
+                .append("font-size:14px;line-height:21px;color:")
+                .append(MUTED)
+                .append(";padding-bottom:20px;\">")
+                .append(tickerInk)
+                .append(" printed a ")
+                .append(pat)
+                .append(" bar on the ")
+                .append(tf)
+                .append(" chart, closing at ")
+                .append(money(event.barSnapshot().close()))
+                .append(" on ")
+                .append(barDate)
+                .append(".</div>");
+
+        // Chart (no CSS border — the PNG carries its own framing).
         if (chartCid.isPresent()) {
             sb.append("<img src=\"cid:")
-                    .append(chartCid.get())
-                    .append("\" alt=\"Heikin Ashi chart\" style=\"max-width:100%;\">");
+                    .append(esc(chartCid.get()))
+                    .append("\" alt=\"Heikin Ashi chart\" width=\"552\" " + "style=\"display:block;width:100%;\">");
         } else {
-            sb.append("<p><i>[Chart unavailable] Pattern: ")
-                    .append(event.subtype().wire())
-                    .append("</i></p>");
+            sb.append("<div style=\"border:1px solid ")
+                    .append(RULE)
+                    .append(";padding:36px 12px;text-align:center;")
+                    .append(MONO)
+                    .append("font-size:13px;color:")
+                    .append(MUTED)
+                    .append(";\">chart unavailable &middot; pattern ")
+                    .append(pat)
+                    .append("</div>");
         }
+        sb.append("<table role=\"presentation\" width=\"100%\"><tr><td style=\"padding:8px 0;")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">")
+                .append(timeframeWord(event.timeframe()))
+                .append("</td><td align=\"right\" style=\"padding:8px 0;")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">price (HA)</td></tr></table>");
 
-        sb.append("<h3>Pattern values</h3>");
-        sb.append("<table><tr><td>HA</td><td>");
-        sb.append("open=").append(money(event.barSnapshot().haOpen()));
-        sb.append(", high=").append(money(event.barSnapshot().haHigh()));
-        sb.append(", low=").append(money(event.barSnapshot().haLow()));
-        sb.append(", close=").append(money(event.barSnapshot().haClose()));
-        sb.append("</td></tr><tr><td>OHLC</td><td>");
-        sb.append("open=").append(money(event.barSnapshot().open()));
-        sb.append(", high=").append(money(event.barSnapshot().high()));
-        sb.append(", low=").append(money(event.barSnapshot().low()));
-        sb.append(", close=").append(money(event.barSnapshot().close()));
+        // Pattern values table.
+        sb.append(sectionLabel("// pattern values"));
+        sb.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>")
+                .append(headCell(""))
+                .append(headCell("OPEN"))
+                .append(headCell("HIGH"))
+                .append(headCell("LOW"))
+                .append(headCell("CLOSE"))
+                .append("</tr>");
+        sb.append(valueRow(
+                "HA",
+                event.barSnapshot().haOpen(),
+                event.barSnapshot().haHigh(),
+                event.barSnapshot().haLow(),
+                event.barSnapshot().haClose()));
+        sb.append(valueRow(
+                "OHLC",
+                event.barSnapshot().open(),
+                event.barSnapshot().high(),
+                event.barSnapshot().low(),
+                event.barSnapshot().close()));
+        sb.append("</table>");
+
+        // Fundamental confidence.
+        sb.append(rule());
+        sb.append("<table role=\"presentation\" width=\"100%\"><tr><td style=\"")
+                .append(MONO)
+                .append("font-size:11px;letter-spacing:2px;color:")
+                .append(MUTED)
+                .append(";\">FUNDAMENTAL CONFIDENCE</td><td align=\"right\" style=\"")
+                .append(MONO)
+                .append("font-size:12px;letter-spacing:1px;color:")
+                .append(INK)
+                .append(";\">");
+        if (analysis.isPresent()) {
+            AiConfidence c = analysis.get().confidence();
+            sb.append(esc(c.wire())).append("&nbsp;&nbsp;").append(dots(c));
+        } else {
+            sb.append("<span style=\"color:").append(MUTED).append(";\">unavailable</span>");
+        }
         sb.append("</td></tr></table>");
+        sb.append(rule());
 
-        sb.append("<h3>AI fundamental analysis");
-        if (analysis.isEmpty()) {
-            sb.append(" (unavailable)");
+        // Corroborating / contradicting.
+        if (analysis.isPresent()) {
+            AiAnalysis a = analysis.get();
+            sb.append(sectionLabel("// corroborating"));
+            sb.append(para(a.corroborating().orElse("None available.")));
+            sb.append(sectionLabel("// contradicting"));
+            sb.append(para(a.contradicting().orElse("None available.")));
         } else {
-            sb.append(" (confidence: ")
-                    .append(analysis.get().confidence().wire())
-                    .append(')');
+            sb.append(sectionLabel("// fundamental analysis"));
+            sb.append(para("AI fundamental analysis unavailable for this alert."));
         }
-        sb.append("</h3>");
-        analysis.ifPresent(a -> {
-            sb.append("<p><b>Corroborating:</b> ")
-                    .append(a.corroborating().orElse(""))
-                    .append("</p>");
-            sb.append("<p><b>Contradicting:</b> ")
-                    .append(a.contradicting().orElse(""))
-                    .append("</p>");
-            if (!a.dataSources().isEmpty()) {
-                sb.append("<p style=\"font-size:11px;color:#888\">Data sources: ");
-                sb.append(String.join(", ", a.dataSources()));
-                sb.append("</p>");
-            }
-        });
 
-        sb.append("<hr><p style=\"font-size:11px;color:#888\">");
-        sb.append("Detected at ")
-                .append(event.detectedAt())
-                .append(". Instrument id: ")
-                .append(event.instrumentId())
-                .append(". Enrichment: ")
-                .append(enrichment.wire())
-                .append('.');
-        sb.append("</p></body></html>");
+        // Footer.
+        sb.append(rule());
+        sb.append("<div style=\"")
+                .append(MONO)
+                .append("font-size:10px;line-height:1.8;color:")
+                .append(FAINT)
+                .append(";\">id &middot; ")
+                .append(esc(event.instrumentId()))
+                .append("<br>sources &middot; ");
+        if (analysis.isPresent() && !analysis.get().dataSources().isEmpty()) {
+            sb.append(esc(String.join(", ", analysis.get().dataSources())));
+        } else {
+            sb.append("none");
+        }
+        sb.append(" &middot; enrichment ").append(esc(enrichment.wire())).append("</div>");
+
+        sb.append("</td></tr></table></td></tr></table></body></html>");
         return sb.toString();
+    }
+
+    private static String rule() {
+        return "<div style=\"border-top:1px solid " + RULE + ";font-size:0;line-height:0;margin:14px 0;\">&nbsp;</div>";
+    }
+
+    private static String sectionLabel(String text) {
+        return "<div style=\"" + MONO + "font-size:11px;letter-spacing:2px;color:" + ACCENT + ";padding:20px 0 8px;\">"
+                + esc(text) + "</div>";
+    }
+
+    private static String headCell(String text) {
+        String align = text.isEmpty() ? "left" : "right";
+        return "<td align=\"" + align + "\" style=\"" + MONO + "font-size:10px;letter-spacing:1.5px;color:" + MUTED
+                + ";padding:0 0 8px;border-bottom:1px solid " + RULE + ";\">" + esc(text) + "</td>";
+    }
+
+    private static String valueRow(String label, BigDecimal o, BigDecimal h, BigDecimal l, BigDecimal c) {
+        return "<tr><td style=\"" + MONO + "font-size:13px;color:" + MUTED + ";padding:8px 0;border-bottom:1px solid "
+                + RULE + ";\">" + esc(label) + "</td>"
+                + numCell(o, INK) + numCell(h, INK) + numCell(l, INK) + numCell(c, ACCENT)
+                + "</tr>";
+    }
+
+    private static String numCell(BigDecimal v, String color) {
+        return "<td align=\"right\" style=\"" + MONO + "font-size:13px;color:" + color
+                + ";padding:8px 0 8px 16px;border-bottom:1px solid " + RULE + ";\">" + money(v) + "</td>";
+    }
+
+    private static String para(String text) {
+        return "<div style=\"" + SANS + "font-size:13px;line-height:1.6;color:" + BODY + ";padding-bottom:4px;\">"
+                + esc(text) + "</div>";
+    }
+
+    /** Four dots, filled up to the confidence level (LOW=1, MEDIUM=2, HIGH=3). */
+    private static String dots(AiConfidence c) {
+        int filled =
+                switch (c) {
+                    case LOW -> 1;
+                    case MEDIUM -> 2;
+                    case HIGH -> 3;
+                };
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= 4; i++) {
+            sb.append("<span style=\"color:")
+                    .append(i <= filled ? ACCENT : RULE)
+                    .append(";\">&#9679;</span>");
+        }
+        return sb.toString();
+    }
+
+    private static String timeframeWord(com.heikinashi.monitoring.domain.Timeframe tf) {
+        return switch (tf) {
+            case D1 -> "daily";
+            case W1 -> "weekly";
+        };
+    }
+
+    private static String esc(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     private static String money(BigDecimal v) {
