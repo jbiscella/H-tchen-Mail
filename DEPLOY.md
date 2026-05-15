@@ -44,7 +44,7 @@ to days of waiting.
 
 AWS Console → SES → Account dashboard → **Request production access**.
 
-- Region: **`eu-south-1`** (the SES region this project targets — see
+- Region: **`eu-central-1`** (the SES region this project targets — see
   `terraform/main/variables.tf` `ses_region` default).
 - Use case: transactional / alerting emails.
 - Daily sending quota: 200/day is plenty.
@@ -55,7 +55,7 @@ addresses you don't own.
 
 ### 1.2 Verify the SES sender email
 
-AWS Console → SES (**eu-south-1**) → Verified identities → **Create
+AWS Console → SES (**eu-central-1**) → Verified identities → **Create
 identity** → "Email address" → enter your sender (e.g.
 `alerts@yourdomain.com`).
 
@@ -128,7 +128,7 @@ tab → **New repository variable**.
 | `AWS_REGION` | `eu-central-1` |
 | `TF_STATE_BUCKET` | `monitoring-tfstate` |
 | `TF_LOCK_TABLE` | `monitoring-tflock` |
-| `ARTIFACTS_BUCKET` | `monitoring-artifacts` |
+| `ARTIFACTS_BUCKET` | `monitoring-artifacts-<unique-suffix>` — S3 names are **globally unique**; pick something like `monitoring-artifacts-<account-id>` or `monitoring-artifacts-<your-org>` |
 | `LAMBDA_MAIN_NAME` | `monitoring-main` |
 | `LAMBDA_RETRY_NAME` | `retry-poller` |
 
@@ -174,7 +174,7 @@ want to change:
 |---|---|---|---|
 | `terraform/main/variables.tf` | `ses_sender_email` | `alerts@example.com` | Must match your verified address |
 | `terraform/main/variables.tf` | `region` | `eu-central-1` | If your compute lives elsewhere |
-| `terraform/main/variables.tf` | `ses_region` | `eu-south-1` | If your SES identity lives elsewhere |
+| `terraform/main/variables.tf` | `ses_region` | `eu-central-1` | If your SES identity lives elsewhere |
 | `terraform/main/variables.tf` | `bedrock_model_id` | Claude Haiku 4.5 | If you've been granted a different model |
 
 You can override at apply time (`-var ses_sender_email=...`) instead of
@@ -248,7 +248,8 @@ Wait for the 22:00 UTC cron — or invoke manually — and check:
 
 | Symptom | Fix |
 |---|---|
-| Workflow fails at `terraform-apply` with `AccessDenied creating SES identity` | SES region in `variables.tf` doesn't match where you verified the identity. Default is `eu-south-1`. |
+| Workflow fails at `terraform-apply` with `AccessDenied creating SES identity` | SES region in `variables.tf` doesn't match where you verified the identity. Default is `eu-central-1`. |
+| `terraform-apply` fails with `BucketAlreadyExists` on the artifacts bucket | `ARTIFACTS_BUCKET` clashes with a globally-existing S3 bucket name. Pick something more unique (e.g. include your account id). |
 | Lambda 5xx at first invoke | Sender email in SSM doesn't match the verified SES identity. Re-run §5. |
 | Bedrock returns `AccessDeniedException` in the AI section of an alert email | §1.3 wasn't completed for the configured model. Request access. |
 | `terraform apply` fails on backend init | Bootstrap stack wasn't applied, or `TF_STATE_BUCKET` / `TF_LOCK_TABLE` repo variables are wrong. |
@@ -256,6 +257,156 @@ Wait for the 22:00 UTC cron — or invoke manually — and check:
 | Push to `main` rejected | Branch protection requires PR. Open a PR and merge. |
 
 ---
+
+## Adding an instrument
+
+The `mon` CLI from CLAUDE.md §10 isn't implemented yet, so registration
+happens via a direct `aws dynamodb transact-write-items` call. The
+service's `InstrumentRegistry.register(...)` writes three items in one
+atomic transaction (CLAUDE.md §4, Block 1):
+
+| Item | `pk` | `sk` | Purpose |
+|---|---|---|---|
+| `UNIQUE_LOCK` | `TICKER#<EXCHANGE>#<TICKER>` | `LOCK` | Prevents duplicate `(ticker, exchange)` registrations |
+| `INSTRUMENT` meta | `INSTRUMENT#<uuid>` | `META` | Display name, currency, status, GSI1 keys |
+| `CONFIG` default | `INSTRUMENT#<uuid>` | `CONFIG` | Storage policy, tracked timeframes, patterns, recipients |
+
+### Supported exchanges
+
+The exchange you pass **must** be in
+`/monitoring/exchanges/supported` (configured per deploy; see
+[`application.yml`](src/main/resources/application.yml)):
+
+| Exchange code | Suffix | Example tickers |
+|---|---|---|
+| `NASDAQ` | (none) | `AAPL`, `MSFT` |
+| `NYSE` | (none) | `IBM` |
+| `MIL` | `.MI` | `ENI.MI` (Eni) |
+| `XETRA` | `.DE` | `SAP.DE` |
+| `LSE` | `.L` | `BP.L`, `GAW.L` |
+| `TSX` | `.TO` | `RY.TO` |
+| `PAR` | `.PA` | `AIR.PA` (Airbus) |
+| `AMS` | `.AS` | `ASML.AS` |
+
+To add another exchange (e.g. SIX Swiss `SWX` → `.SW`, BME Madrid →
+`.MC`), update **two** places before redeploying:
+
+1. `terraform/main/lambda.tf` `environment.variables` — append the
+   exchange code to `MONITORING_EXCHANGES_SUPPORTED` and the suffix to
+   the JSON in `MONITORING_EXCHANGES_SUFFIX_MAP`.
+2. (Optional) the SSM catalog in `terraform/main/ssm.tf` if you want
+   the operator documentation to match.
+
+### Recipe — register an instrument
+
+Generate a UUID, fill in the four placeholders, paste into a terminal
+(macOS / Linux):
+
+```bash
+INSTRUMENT_ID=$(uuidgen | tr 'A-Z' 'a-z')
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TICKER=GAW              # uppercase, no whitespace
+EXCHANGE=LSE            # one of the supported codes above
+NAME="Games Workshop Group plc"
+CURRENCY=GBP
+RECIPIENT=you@example.com   # who gets the alert emails
+TABLE=monitoring        # override only if you changed var.table_name
+
+aws dynamodb transact-write-items --transact-items "$(cat <<EOF
+[
+  { "Put": {
+    "TableName": "$TABLE",
+    "Item": {
+      "pk":            {"S": "TICKER#$EXCHANGE#$TICKER"},
+      "sk":            {"S": "LOCK"},
+      "entity":        {"S": "UNIQUE_LOCK"},
+      "instrument_id": {"S": "$INSTRUMENT_ID"},
+      "created_at":    {"S": "$NOW"}
+    },
+    "ConditionExpression": "attribute_not_exists(pk)"
+  }},
+  { "Put": {
+    "TableName": "$TABLE",
+    "Item": {
+      "pk":         {"S": "INSTRUMENT#$INSTRUMENT_ID"},
+      "sk":         {"S": "META"},
+      "entity":     {"S": "INSTRUMENT"},
+      "id":         {"S": "$INSTRUMENT_ID"},
+      "ticker":     {"S": "$TICKER"},
+      "exchange":   {"S": "$EXCHANGE"},
+      "name":       {"S": "$NAME"},
+      "currency":   {"S": "$CURRENCY"},
+      "status":     {"S": "active"},
+      "created_at": {"S": "$NOW"},
+      "updated_at": {"S": "$NOW"},
+      "gsi1Pk":     {"S": "STATUS#active"},
+      "gsi1Sk":     {"S": "INSTRUMENT#$INSTRUMENT_ID"}
+    },
+    "ConditionExpression": "attribute_not_exists(pk)"
+  }},
+  { "Put": {
+    "TableName": "$TABLE",
+    "Item": {
+      "pk":                  {"S": "INSTRUMENT#$INSTRUMENT_ID"},
+      "sk":                  {"S": "CONFIG"},
+      "entity":              {"S": "CONFIG"},
+      "storage_policy":      {"S": "ROLLING_WINDOW"},
+      "rolling_window_size": {"N": "200"},
+      "tracked_timeframes":  {"SS": ["1d"]},
+      "patterns": {"M": {
+        "color_change":  {"M": {"enabled": {"BOOL": true},  "min_streak_length": {"N": "3"}}},
+        "strong_candle": {"M": {"enabled": {"BOOL": false}, "wick_tolerance": {"N": "0.001"}, "min_body_ratio": {"N": "0.5"}}},
+        "doji":          {"M": {"enabled": {"BOOL": false}, "max_body_ratio": {"N": "0.1"}}}
+      }},
+      "recipients":         {"SS": ["$RECIPIENT"]},
+      "enable_chart":       {"BOOL": true},
+      "enable_ai_analysis": {"BOOL": true},
+      "created_at":         {"S": "$NOW"},
+      "updated_at":         {"S": "$NOW"}
+    },
+    "ConditionExpression": "attribute_not_exists(pk)"
+  }}
+]
+EOF
+)"
+
+echo "Registered $TICKER on $EXCHANGE as $INSTRUMENT_ID"
+```
+
+Notes:
+
+- The `color_change` pattern is enabled by default with a 3-bar streak —
+  edit the `patterns.M` block before running to toggle the others.
+- `recipients` is the addresses that receive the alert email; if empty
+  the dispatch silently skips.
+- The transaction will fail with `ConditionalCheckFailedException` on
+  the lock item if the same `(exchange, ticker)` is already registered
+  — that's the duplicate-instrument guard working.
+
+### Verify
+
+```bash
+# The instrument shows up under "active" via GSI1:
+aws dynamodb query \
+  --table-name monitoring \
+  --index-name gsi_status \
+  --key-condition-expression "gsi1Pk = :pk" \
+  --expression-attribute-values '{":pk":{"S":"STATUS#active"}}' \
+  --projection-expression "id, ticker, exchange, #s" \
+  --expression-attribute-names '{"#s":"status"}'
+```
+
+The next 22:00 UTC cron will pick it up, or trigger it manually:
+
+```bash
+aws lambda invoke \
+  --function-name monitoring-main:live \
+  --payload "$(printf '{"instrument_ids":["%s"]}' "$INSTRUMENT_ID" | base64)" \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/out.json
+
+cat /tmp/out.json
+```
 
 ## Recurring deploys
 
