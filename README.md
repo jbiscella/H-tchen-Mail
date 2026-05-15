@@ -10,6 +10,10 @@ an HTML email with an inline chart and a short fundamental-analysis note
 written by Claude. It runs entirely on AWS Lambda: there is no server to keep
 up and no UI to log into — the inbox *is* the interface.
 
+## What an alert looks like
+
+![Example Heikin Ashi alert email](email-example.jpeg)
+
 ## How it works
 
 Once a day an EventBridge cron fires the `monitoring-main` Lambda, which for
