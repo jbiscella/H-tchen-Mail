@@ -19,6 +19,7 @@ import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.annotations.XYPointerAnnotation;
+import org.jfree.chart.axis.NumberAxis;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.CandlestickRenderer;
 import org.jfree.data.time.FixedMillisecond;
@@ -88,6 +89,13 @@ public class JFreeChartRenderer implements ChartRenderer {
             cr.setUpPaint(new Color(0x2E, 0xCC, 0x71));
             cr.setDownPaint(new Color(0xE7, 0x4C, 0x3C));
             cr.setUseOutlinePaint(false);
+        }
+
+        // The default NumberAxis auto-range includes zero, which leaves the
+        // candles squeezed into a thin band at the top. Disable it so the
+        // price axis brackets the actual HA high/low range tightly.
+        if (plot.getRangeAxis() instanceof NumberAxis priceAxis) {
+            priceAxis.setAutoRangeIncludesZero(false);
         }
 
         // Highlight the pattern bar with an arrow at (bar_time, ha_close).
