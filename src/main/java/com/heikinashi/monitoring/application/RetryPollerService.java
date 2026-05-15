@@ -105,6 +105,7 @@ public class RetryPollerService {
         try {
             chart = Optional.of(chartRenderer.renderChart(event));
         } catch (ChartRenderException | DependencyUnavailableException e) {
+            logRetryFailure(event, "chart", e);
             chart = Optional.empty();
         }
 
@@ -112,6 +113,7 @@ public class RetryPollerService {
         try {
             analysis = Optional.of(aiAnalyst.analyze(event));
         } catch (LLMException | DependencyUnavailableException e) {
+            logRetryFailure(event, "ai", e);
             analysis = Optional.empty();
         }
 
@@ -206,5 +208,26 @@ public class RetryPollerService {
     @SuppressWarnings("unused")
     private static String codeOf(RuntimeException e) {
         return e instanceof DomainException de ? de.code() : e.getClass().getSimpleName();
+    }
+
+    /**
+     * Diagnostic ERROR log on every retry-time chart/AI failure with full
+     * exception + cause chain. The retry semantics live below in
+     * {@link #bumpRetry}; this is purely observability so each retry attempt
+     * shows the real upstream reason in CloudWatch.
+     */
+    private void logRetryFailure(PatternEvent event, String component, RuntimeException cause) {
+        Throwable root = cause.getCause();
+        LOG.error(
+                "retry_attempt_failed instrument_id={} bar_time={} component={} "
+                        + "ex_class={} ex_message={} cause_class={} cause_message={}",
+                event.instrumentId(),
+                event.barTime(),
+                component,
+                cause.getClass().getName(),
+                cause.getMessage() == null ? "" : cause.getMessage(),
+                root == null ? "" : root.getClass().getName(),
+                root == null || root.getMessage() == null ? "" : root.getMessage(),
+                cause);
     }
 }
