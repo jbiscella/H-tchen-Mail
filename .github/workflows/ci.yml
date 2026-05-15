@@ -262,6 +262,20 @@ jobs:
           echo "jar=$jar" >> "$GITHUB_OUTPUT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
+      - name: Inspect jar before upload
+        run: |
+          set -e
+          jar="${{ steps.jar.outputs.jar }}"
+          size=$(stat -c %s "$jar")
+          echo "Uploading: $jar (${size} bytes)"
+          if unzip -l "$jar" | grep -qE ' application\.yml$'; then
+            echo "::notice::application.yml present at jar root"
+          else
+            echo "::error::application.yml missing from jar root — Lambda will fail to resolve Micronaut properties"
+            unzip -l "$jar" | head -40
+            exit 1
+          fi
+
       - name: Upload jar to S3
         run: |
           aws s3 cp "${{ steps.jar.outputs.jar }}" \
