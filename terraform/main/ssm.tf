@@ -50,7 +50,7 @@ locals {
     "/monitoring/email/charset"        = "UTF-8"
 
     "/monitoring/ses/region"   = var.ses_region
-    "/monitoring/ses/reply-to" = ""
+    "/monitoring/ses/reply-to" = "var.ses_sender_email"
 
     "/monitoring/alerts/audit-enabled" = "false"
 
