@@ -126,20 +126,15 @@ final class EmailBodies {
                 .append(" UTC</td></tr></table>");
         sb.append(rule());
 
-        // Terminal command line (13px mono; $ in accent, rest ink).
-        sb.append("<div style=\"")
-                .append(MONO)
-                .append("font-size:13px;color:")
-                .append(INK)
-                .append(";\"><span style=\"color:")
-                .append(ACCENT)
-                .append(";\">$</span> ha-alert --symbol=")
-                .append(ticker)
-                .append(" --pattern=")
-                .append(pat)
-                .append(" --tf=")
-                .append(tf)
-                .append("</div>");
+        // Summary key/value table — readable for non-technical readers.
+        sb.append("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\">")
+                .append(kvRow("INSTRUMENT", ticker))
+                .append(kvRow(
+                        "PATTERN",
+                        esc(event.pattern().wire()) + " &middot; "
+                                + esc(event.subtype().wire())))
+                .append(kvRow("TIMEFRAME", timeframeWord(event.timeframe())))
+                .append("</table>");
         sb.append(rule());
 
         // Heading + lede (Helvetica).
@@ -269,6 +264,13 @@ final class EmailBodies {
 
     private static String rule() {
         return "<div style=\"border-top:1px solid " + RULE + ";font-size:0;line-height:0;margin:14px 0;\">&nbsp;</div>";
+    }
+
+    /** One row of the summary key/value table. {@code value} must already be HTML-safe. */
+    private static String kvRow(String label, String value) {
+        return "<tr><td style=\"" + MONO + "font-size:10px;letter-spacing:1.5px;color:" + MUTED
+                + ";padding:3px 28px 3px 0;\">" + esc(label) + "</td><td style=\"" + MONO
+                + "font-size:13px;color:" + INK + ";padding:3px 0;\">" + value + "</td></tr>";
     }
 
     private static String sectionLabel(String text) {
