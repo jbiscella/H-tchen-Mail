@@ -54,7 +54,8 @@ of what's in it.
 | Compute               | **AWS Lambda** (JVM managed runtime + **SnapStart**, no Native Image) |
 | Database              | **Amazon DynamoDB** (single-table design, on-demand billing)        |
 | AWS SDK               | **AWS SDK v2** (DynamoDB, Bedrock, SES v2, SSM)                     |
-| Market data provider  | **Yahoo Finance via `de.sfuhrm:YahooFinanceAPI`** behind `MarketDataProvider` interface |
+| Market data provider  | **EODHD End-of-Day API** for OHLC history, behind the `MarketDataProvider` port |
+| News providers        | **Marketaux** + **Yahoo Finance RSS**, aggregated and de-duplicated behind the same port |
 | AI provider           | **AWS Bedrock** + **Claude** (model id from config) via `BedrockRuntimeClient.converse(...)` with manual tool-use loop |
 | Charting              | **JFreeChart** (`OHLCSeriesCollection` + `CandlestickRenderer`, headless) |
 | Email composition     | **Apache Commons Email** (`commons-email2-jakarta`) → MIME built, sent via **SES v2 `sendEmail` with raw content** |
@@ -186,7 +187,7 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 | `low`          | Number          | yes      | > 0; ≤ open; ≤ close                                |
 | `close`        | Number          | yes      | > 0                                                 |
 | `volume`       | Number          | no       | ≥ 0                                                 |
-| `source`       | String          | yes      | e.g. `yahoo`                                       |
+| `source`       | String          | yes      | provider tag, e.g. `eodhd`                         |
 | `ingested_at`  | String          | yes      | ISO 8601 UTC                                       |
 | `ttl`          | Number          | cond.    | per storage policy                                 |
 
@@ -294,13 +295,13 @@ All exceptions extend a `DomainException` hierarchy. Every error has a stable `c
 | `DuplicateInstrumentException`    | Conflict          | register (TransactWrite cond)           | `ticker`, `exchange`                                 |
 | `ConcurrentModificationException` | Conflict          | TransactWrite / ConditionalUpdate       | `resource`                                           |
 | `ThrottledException`              | Transient         | DynamoDB throughput / SES throttle       | `retry_after_ms`                                     |
-| `ProviderUnavailableException`    | Transient         | Yahoo timeout, 5xx, auth                | `provider`, `cause`, `retry_after`                   |
+| `ProviderUnavailableException`    | Transient         | market-data / news provider timeout, 5xx, auth, quota | `provider`, `cause`, `retry_after`         |
 | `DependencyUnavailableException`  | Transient         | DynamoDB/SES/SSM unreachable            | `dependency`                                         |
 | `CircuitOpenException`            | Transient         | per-ticker breaker tripped              | `ticker`                                             |
 | `ChartRenderException`            | Transient         | JFreeChart failure                      | `cause`                                              |
 | `LLMException`                    | Transient         | Bedrock failure / max iterations / non-JSON output | `cause`                                   |
 | `EmailCompositionException`       | Internal          | Commons Email MIME failure              | `cause`                                              |
-| `SchemaDriftException`            | Internal          | Yahoo response cannot be parsed         | `endpoint`, `payload_sample`                         |
+| `SchemaDriftException`            | Internal          | provider response cannot be parsed (EODHD JSON, Marketaux JSON, Yahoo RSS) | `endpoint`, `payload_sample`      |
 | `SESConfigurationException`       | Internal (fatal)  | Sandbox mode in prod, sender unverified | `reason`                                             |
 | `MalformedHABarException`         | Internal          | HA bar in DB inconsistent               | `bar_time`                                           |
 | `PatternConfigStaleException`     | Internal          | Config references unknown pattern       | `pattern`                                            |
@@ -555,49 +556,64 @@ Feature: Per-Instrument Configuration — Domain Operations
 
 ---
 
-## 6. Block 3 — Quote Ingestion via Yahoo Finance
+## 6. Block 3 — Quote Ingestion via EODHD
 
-**Goal**: For each active instrument and each tracked timeframe, fetch closed OHLC bars from Yahoo Finance, persist idempotently to DynamoDB, apply storage policy.
+**Goal**: For each active instrument and each tracked timeframe, fetch closed OHLC bars from the EODHD End-of-Day API, persist idempotently to DynamoDB, apply storage policy.
+
+> **Provider history**: the project originally scraped Yahoo Finance via
+> `de.sfuhrm:YahooFinanceAPI`. That was abandoned (unstable, unofficial,
+> captcha-prone) in favour of **EODHD**, an official paid API with a clean
+> REST/JSON contract. The `MarketDataProvider` port was kept; only the
+> adapter changed. Yahoo still appears in the project — but only as a
+> *news* source (see "News & fundamentals" below), never for price history.
 
 ### Design decisions
 
 | Aspect                          | Choice                                                                                  |
 |---------------------------------|-----------------------------------------------------------------------------------------|
-| Provider                        | Yahoo Finance via `de.sfuhrm:YahooFinanceAPI`                                          |
-| Abstraction                     | `MarketDataProvider` interface in `domain`; `YahooFinanceProvider` in `infrastructure` |
-| Self-imposed throttling         | max 1 req/sec, max 30 req/min                                                          |
-| Symbol mapping                  | exchange suffix lookup (table below)                                                    |
-| Auto-adjust                     | enabled (split/dividend adjusted historical prices)                                     |
+| Provider                        | **EODHD End-of-Day API** — `GET https://eodhd.com/api/eod/{symbol}`, `api_token` query-param auth, `fmt=json` |
+| Abstraction                     | `MarketDataProvider` port in `domain`; `EodhdMarketDataProvider` (history) in `infrastructure`, exposed via `CompositeMarketDataProvider` |
+| API key                         | `monitoring.eodhd.api-key`, set from the `MONITORING_EODHD_API_KEY` env var (no default — boot fails fast if missing) |
+| Call budget                     | EODHD free tier is ~20 calls/day — one `fetchHistory` per (instrument, timeframe). Sized for a small watchlist |
+| Symbol mapping                  | exchange suffix lookup, **EODHD** codes (table below)                                   |
+| Price field                     | EODHD `/eod` returns raw OHLC plus `adjusted_close`; the adapter persists the raw `close` |
 | Closed-bar filter               | `bar_time + period_seconds(tf) <= now`                                                  |
-| Bootstrap window                | `1d → 250 bars`, `1w → 260 bars` (~5 years), config-driven                             |
-| Steady-state range              | from `last_bar.bar_time + 1 period` to `now`                                            |
+| Bootstrap window                | `1d → 250 bars`, `1w → 260 bars` (~5 years), config-driven (`monitoring.bootstrap.*`)   |
+| Steady-state range              | from `last_bar.bar_time + 1 period` to `now` (EODHD `from=` query param)                |
 | Idempotency                     | conditional Put with `attribute_not_exists(pk)` on (instrument, tf, bar_time)           |
-| Timeframe mapping               | `1d → DAILY`, `1w → WEEKLY`                                                            |
+| Timeframe mapping               | `1d → period=d`, `1w → period=w`                                                        |
 | Timezone normalization          | `1d → date midnight UTC`; `1w → Monday 00:00 UTC of that week`                          |
 | Circuit breaker                 | 3 consecutive failures on same ticker → skip rest of run                                |
 | Run-level alarm                 | failure rate > 50% → CRITICAL log + CloudWatch alarm                                    |
 
 ### Exchange suffix map (config-driven)
 
-| Exchange | Yahoo suffix | Example     |
-|----------|--------------|-------------|
-| NASDAQ   | (none)       | `AAPL`      |
-| NYSE     | (none)       | `IBM`       |
-| MIL      | `.MI`        | `ENI.MI`    |
-| XETRA    | `.DE`        | `SAP.DE`    |
-| LSE      | `.L`         | `BP.L`      |
-| TSX      | `.TO`        | `RY.TO`     |
-| PAR      | `.PA`        | `AIR.PA`    |
-| AMS      | `.AS`        | `ASML.AS`   |
+EODHD addresses listings as `TICKER.EXCHANGE_CODE`. The codes are **not**
+the same as Yahoo's — EODHD uses `.US` for all US listings, `.LSE` (not
+`.L`), `.XETRA` (not `.DE`). The map lives in `monitoring.exchanges.suffix-map`.
+
+| Exchange | EODHD suffix | Example       |
+|----------|--------------|---------------|
+| NASDAQ   | `.US`        | `AAPL.US`     |
+| NYSE     | `.US`        | `IBM.US`      |
+| MIL      | `.MI`        | `ENI.MI`      |
+| XETRA    | `.XETRA`     | `SAP.XETRA`   |
+| LSE      | `.LSE`       | `BP.LSE`      |
+| TSX      | `.TO`        | `RY.TO`       |
+| PAR      | `.PA`        | `AIR.PA`      |
+| AMS      | `.AS`        | `ASML.AS`     |
+| SWX      | `.SW`        | `CFR.SW`      |
+| BME      | `.MC`        | `SAN.MC`      |
 
 ### Brittleness handling
 
 | Failure mode                                  | Behavior                                                       |
 |-----------------------------------------------|----------------------------------------------------------------|
-| 401/403/captcha                               | log error, classify as `ProviderUnavailableException`, retry exponential |
-| Schema drift (missing field)                  | log error with sanitized payload sample, raise `SchemaDriftException`, skip instrument |
-| Ticker not found                              | `TickerNotFoundException`, no auto-archive                     |
-| Network timeout                               | retry 3× with backoff 1s/2s/4s                                  |
+| 401 / 403 (bad or expired API token)          | classify as `ProviderUnavailableException`, retry exponential  |
+| 429 (daily call quota exhausted)              | classify as `ProviderUnavailableException`, retry exponential  |
+| Schema drift (non-JSON, not an array, unmappable bar) | log a sanitized sample, raise `SchemaDriftException`, skip instrument |
+| Ticker not found (404)                        | `TickerNotFoundException`, no auto-archive                     |
+| Network timeout                               | retry with backoff                                             |
 | 3 consecutive failures on same ticker         | circuit-breaker open: skip remainder of run                    |
 | > 50% instruments failed                      | CRITICAL log, CloudWatch alarm, run still returns summary      |
 
@@ -609,12 +625,12 @@ Feature: Per-Instrument Configuration — Domain Operations
 | `normalize_bar_time(raw, tf) -> Instant`                      | as above                                              |
 | `is_closed(bar_time, tf, now) -> boolean`                     | `bar_time + period_seconds(tf) <= now`                 |
 | `compute_ttl(config, bar_time, tf) -> Long\|null`             | per storage policy                                    |
-| `yahoo_symbol(ticker, exchange, suffix_map) -> String`        | concatenate with suffix                               |
+| `provider_symbol(ticker, exchange, suffix_map) -> String`     | concatenate ticker with the EODHD exchange suffix     |
 
 ### Domain operations (Gherkin)
 
 ```gherkin
-Feature: Quote Ingestion from Yahoo Finance
+Feature: Quote Ingestion from EODHD
 
   Background:
     Given current UTC time is "2026-05-07T22:00:00Z"
@@ -649,7 +665,7 @@ Feature: Quote Ingestion from Yahoo Finance
     Given instrument "AAPL" on "NASDAQ" with no OHLC bars stored
     And bootstrap_size["1d"] = 250
     When I call ingest_timeframe(I, "1d")
-    Then provider.fetchHistory(symbol="AAPL", interval=DAILY, since=now-250d) is called
+    Then provider.fetchHistory(symbol="AAPL.US", tf="1d", since=now-250d) is called
     And only bars where is_closed(bar_time, "1d", now) is true are kept
     And each bar is persisted with conditional put on (instrument, tf, bar_time)
     And the storage policy is applied
@@ -669,34 +685,34 @@ Feature: Quote Ingestion from Yahoo Finance
 
   Scenario: Idempotent re-ingestion
     Given the bar for ("abc-123", "1d", "2026-05-06") is already in DB
-    When ingest_timeframe(I, "1d") runs again and Yahoo returns the same bar
+    When ingest_timeframe(I, "1d") runs again and EODHD returns the same bar
     Then the conditional put fails on the existing key
     And the failure is treated as a no-op (not an error)
 
-  Scenario: Yahoo returns empty result
-    Given Yahoo returns no quotes for the requested period
+  Scenario: Provider returns empty result
+    Given EODHD returns an empty array for the requested period
     When I call ingest_timeframe(I, "1d")
     Then the operation succeeds with 0 bars persisted
     And a debug log entry is emitted
 
-  Scenario: Yahoo ticker not found / delisted
-    Given Yahoo returns "no data" or 404 for a symbol
+  Scenario: Ticker not found / delisted
+    Given EODHD returns HTTP 404 for a symbol
     When I call ingest_timeframe(I, "1d")
     Then TickerNotFoundException is raised (logged at instrument level)
     And the instrument is NOT auto-archived
 
-  Scenario: Yahoo transient failure with retry
-    Given Yahoo returns timeout / 5xx
+  Scenario: Transient failure with retry
+    Given EODHD returns a timeout, a 5xx, or 429 (quota)
     When I call ingest_timeframe(I, "1d")
     Then up to 3 retries with exponential backoff (1s, 2s, 4s) are attempted
     And on final failure ProviderUnavailableException is raised
 
-  Scenario: Schema drift (Yahoo changed response format)
-    Given the response cannot be parsed
+  Scenario: Schema drift (EODHD response cannot be parsed)
+    Given the response is not a JSON array of bars, or a bar is unmappable
     When ingest_timeframe processes it
     Then SchemaDriftException is raised with a sanitized payload sample logged
     And the instrument is skipped, ingestion continues for others
-    And a CRITICAL log signals "Yahoo schema drift detected"
+    And a CRITICAL log signals "EODHD schema drift detected"
 
   Scenario: Circuit breaker on repeated failures for same ticker
     Given the same ticker has failed 3 times consecutively in this run
@@ -705,11 +721,11 @@ Feature: Quote Ingestion from Yahoo Finance
     And no further attempts for this ticker happen until the next run
 
   Scenario: Daily bar timezone normalization
-    Given Yahoo returns a daily bar at date "2026-05-06"
+    Given EODHD returns a daily bar at date "2026-05-06"
     Then normalized bar_time is "2026-05-06T00:00:00Z"
 
   Scenario: Weekly bar normalization to Monday UTC
-    Given Yahoo returns a weekly bar anywhere in the week
+    Given EODHD returns a weekly bar anywhere in the week
     Then normalized bar_time is the Monday 00:00 UTC of that week
 
   Scenario: Reject bar that violates OHLC invariants
@@ -748,9 +764,9 @@ Feature: Quote Ingestion from Yahoo Finance
     And TTL will naturally evict the oldest 150 over time
 
   Scenario: Block 3 only depends on the MarketDataProvider interface
-    Given the production wiring binds YahooFinanceProvider
+    Given the production wiring binds EodhdMarketDataProvider via CompositeMarketDataProvider
     When ingest_timeframe runs
-    Then no Yahoo-specific class is referenced outside YahooFinanceProvider
+    Then no EODHD-specific class is referenced outside the eodhd adapter package
 
   Scenario: Return ingestion summary
     When ingest_all_active() completes
@@ -767,7 +783,7 @@ Feature: Quote Ingestion from Yahoo Finance
 
 ```
 ingest_timeframe(I, tf):
-  symbol = yahoo_symbol(I.ticker, I.exchange, suffix_map)
+  symbol = provider_symbol(I.ticker, I.exchange, suffix_map)   # e.g. "AAPL.US"
   last = query_latest_ohlc(I.id, tf)
   since = last ? last.bar_time + 1 period : now - bootstrap_size[tf] periods
 
@@ -783,17 +799,38 @@ ingest_timeframe(I, tf):
 
 ### MarketDataProvider interface (port)
 
-The interface lives in `domain`. Methods Yahoo can support today; AI fundamentals are best-effort and can return empty results when Yahoo lacks data.
+The interface lives in `domain`. `fetchHistory` is the only method backed by
+a real implementation today (EODHD); the fundamentals methods are best-effort
+and return empty defaults unless a provider implements them.
 
-| Method                                                              | Returns                                          |
-|---------------------------------------------------------------------|--------------------------------------------------|
-| `fetchHistory(symbol, tf, since)`                                   | list of `OHLCBar` (raw, pre-normalization)       |
-| `fetchQuoteInfo(ticker, exchange)`                                  | sector, industry, marketCap, P/E, EPS, beta     |
-| `fetchEarningsCalendar(ticker, exchange)`                           | next + last earnings dates, surprise %          |
-| `fetchNewsHeadlines(ticker, exchange, max)`                         | list (title, date, source)                      |
-| `fetchRecommendations(ticker, exchange)`                            | analyst rating items                            |
-| `fetchFinancialsSummary(ticker, exchange)`                          | revenue / net income / operating cash flow last 4 quarters |
-| `fetchInsiderTransactions(ticker, exchange)`                        | recent insider trades                           |
+| Method                                                              | Returns                                          | Implemented by |
+|---------------------------------------------------------------------|--------------------------------------------------|----------------|
+| `fetchHistory(symbol, tf, since)`                                   | list of `OHLCBar` (raw, pre-normalization)       | `EodhdMarketDataProvider` |
+| `fetchNewsHeadlines(ticker, exchange, max)`                         | list of `NewsHeadline` (title, date, source, url) | `NewsAggregator` (Marketaux + Yahoo RSS) |
+| `fetchQuoteInfo(ticker, exchange)`                                  | sector, industry, marketCap, P/E, EPS, beta      | — (empty default) |
+| `fetchEarningsCalendar(ticker, exchange)`                           | next + last earnings dates, surprise %           | — (empty default) |
+| `fetchRecommendations(ticker, exchange)`                            | analyst rating items                             | — (empty default) |
+| `fetchFinancialsSummary(ticker, exchange)`                          | revenue / net income / OCF last 4 quarters       | — (empty default) |
+| `fetchInsiderTransactions(ticker, exchange)`                        | recent insider trades                            | — (empty default) |
+
+### News & fundamentals provider composition
+
+`CompositeMarketDataProvider` (the `@Primary MarketDataProvider` bean) wires
+the single-purpose adapters together:
+
+- **History** → `EodhdMarketDataProvider` (this block).
+- **News** → `NewsAggregator`, which fans `fetchNewsHeadlines` out across
+  every enabled `NewsProvider` in parallel. Two ship today:
+  `MarketauxNewsProvider` (the Marketaux API, key-authed) and
+  `YahooFinanceRssNewsProvider` (the Yahoo Finance headline RSS feed, no key,
+  browser `User-Agent` required). A single provider failing is logged and
+  dropped — it does not fail the call. Results are merged, de-duplicated (by
+  exact URL, or by normalized title within a one-hour window), sorted
+  newest-first, and capped. `monitoring.news.providers` enables/disables a
+  source without touching code.
+- **Quote info / earnings / recommendations / financials / insider trades**
+  → not implemented; the interface defaults return empty. The AI tool layer
+  (Block 6) treats empty results gracefully.
 
 ---
 
@@ -1655,7 +1692,7 @@ CLI uses AWS SDK v2 directly against DynamoDB / Lambda. No HTTP API.
 |---------------------------------------------------------|------|--------|
 | `domain/**`                                             | 95%  | 90%    |
 | `application/**`                                        | 90%  | 80%    |
-| `infrastructure/**` (excluding Yahoo/Bedrock adapters)  | 80%  | 70%    |
+| `infrastructure/**` (excluding EODHD/Marketaux/Yahoo-RSS/Bedrock adapters) | 80%  | 70%    |
 | `orchestration/**` (handlers)                           | 75%  | 60%    |
 | Global                                                  | 85%  | 75%    |
 
@@ -1869,7 +1906,7 @@ Auth: OIDC federation, no static keys.
 | 3  | Verify SES sender email                                                |
 | 4  | Request SES production access (can take days)                          |
 | 5  | Request Bedrock model access in chosen region                          |
-| 6  | Yahoo Finance: no auth required, but pre-test the symbols you plan to use |
+| 6  | EODHD + Marketaux API keys obtained; pre-test the symbols you plan to use |
 | 7  | Populate SSM SecureString: `ses/sender-email` (and any other secrets) |
 | 8  | Configure GitHub repo: Settings → Secrets/Variables (region, account id) |
 | 9  | First push to `main` → workflow applies Terraform + deploys Lambdas    |
@@ -1912,7 +1949,7 @@ Auth: OIDC federation, no static keys.
 |-----------------------------|---------------------------------------------------------------------------|------------------------------------|
 | `domain`                    | records + sealed types + pure functions + port interfaces                 | nothing external                   |
 | `application` (services)    | use case orchestration                                                    | `domain`                           |
-| `infrastructure`            | DynamoDB / Yahoo / Bedrock / SES / JFreeChart adapters                    | `domain`, `application`, AWS SDK   |
+| `infrastructure`            | DynamoDB / EODHD / Marketaux / Yahoo-RSS / Bedrock / SES / JFreeChart adapters | `domain`, `application`, AWS SDK |
 | `orchestration` (Lambda)    | handlers + wiring                                                          | all                                |
 
 Rule: **if an import in `domain/**` references `software.amazon.*` or `org.jfree.*`, that's an architectural bug.**
@@ -1953,7 +1990,7 @@ Everything non-deterministic goes behind an injectable interface:
 |--------------------------|--------------------------------------|--------------------------------|------------------------|
 | Time                     | `java.time.Clock`                    | `Clock.systemUTC()`            | `Clock.fixed(...)`     |
 | UUID                     | `UuidGenerator` (custom)             | random impl                    | sequenced impl         |
-| External HTTP            | `MarketDataProvider`                 | `YahooFinanceProvider`         | in-memory fake         |
+| External HTTP            | `MarketDataProvider`                 | `CompositeMarketDataProvider`  | in-memory fake         |
 | DynamoDB                 | per-entity repositories              | `DynamoDb*Repository`          | LocalStack             |
 | Bedrock                  | `AiAnalyst`                          | `BedrockAiAnalyst`             | scripted mock          |
 | SES                      | `EmailSender`                        | `SesEmailSender`               | capturing mock         |
@@ -2020,13 +2057,17 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 
 | Path                                              | Type          | Default                                          | Notes                              |
 |---------------------------------------------------|---------------|--------------------------------------------------|------------------------------------|
-| `/monitoring/market-data/provider`                | String        | `yahoo`                                          | switches `MarketDataProvider`      |
-| `/monitoring/market-data/yahoo/timeout-seconds`   | String        | `10`                                             |                                    |
-| `/monitoring/market-data/yahoo/max-rps`           | String        | `1`                                              | self-throttling                    |
+| `/monitoring/eodhd/base-url`                      | String        | `https://eodhd.com/api`                          | EODHD history API                  |
+| `/monitoring/eodhd/timeout-seconds`               | String        | `10`                                             |                                    |
+| `/monitoring/eodhd/api-key`                       | SecureString  | —                                                | env `MONITORING_EODHD_API_KEY`     |
+| `/monitoring/marketaux/base-url`                  | String        | `https://api.marketaux.com/v1`                   | Marketaux news API                 |
+| `/monitoring/marketaux/api-key`                   | SecureString  | —                                                | env `MONITORING_MARKETAUX_API_KEY` |
+| `/monitoring/news/providers`                      | String (list) | `marketaux,yahoo-rss`                            | enabled news adapters              |
 | `/monitoring/bootstrap/size-1d`                   | String        | `250`                                            |                                    |
 | `/monitoring/bootstrap/size-1w`                   | String        | `260`                                            |                                    |
-| `/monitoring/exchanges/supported`                 | String (csv)  | `NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS`          |                                    |
-| `/monitoring/exchanges/suffix-map`                | String (json) | `{"MIL":".MI","XETRA":".DE","LSE":".L",...}`     |                                    |
+| `/monitoring/exchanges/supported`                 | String (csv)  | `NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME`  |                                    |
+| `/monitoring/exchanges/suffix-map`                | String (json) | EODHD codes — `{"NASDAQ":".US","XETRA":".XETRA","LSE":".LSE",...}` |                   |
+| `/monitoring/exchanges/yahoo-suffix-map`          | String (json) | Yahoo codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | for the Yahoo RSS news adapter |
 | `/monitoring/ingest/circuit-breaker.threshold`    | String        | `3`                                              |                                    |
 | `/monitoring/ingest/failure-rate-alert`           | String        | `0.5`                                            |                                    |
 | `/monitoring/bedrock/model-id`                    | String        | `anthropic.claude-haiku-4-5-20251001-v1:0`       |                                    |
@@ -2113,7 +2154,7 @@ Namespace: `Monitoring/HeikinAshi`.
 | 0.B   | Internal error catalog                            | ✅     |
 | 1     | Domain ops: registry                              | ✅     |
 | 2     | Domain ops: config                                | ✅     |
-| 3     | Quote ingestion (Yahoo + abstraction)             | ✅     |
+| 3     | Quote ingestion (EODHD + news aggregation)        | ✅     |
 | 4     | Heikin Ashi computation                           | ✅     |
 | 5     | Pattern detection                                 | ✅     |
 | 6     | Rich dispatch (JFreeChart + Bedrock + Commons Email) | ✅  |
