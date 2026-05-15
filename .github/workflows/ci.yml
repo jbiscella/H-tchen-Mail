@@ -324,33 +324,53 @@ jobs:
           MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
           LAMBDA_MAIN_NAME: ${{ env.LAMBDA_MAIN_NAME }}
         run: |
-          set -e
-          ROLE_ARN=$(aws iam get-role --role-name "${LAMBDA_MAIN_NAME}-role" \
-            --query 'Role.Arn' --output text 2>/dev/null || echo "")
-          if [[ -z "$ROLE_ARN" ]]; then
-            echo "::error::${LAMBDA_MAIN_NAME}-role does not exist after terraform-apply — investigate the apply step output."
+          set -euo pipefail
+
+          ROLE_NAME="${LAMBDA_MAIN_NAME}-role"
+          if ! ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>&1); then
+            echo "::error::aws iam get-role failed for $ROLE_NAME:"
+            echo "$ROLE_ARN"
             exit 1
           fi
-          echo "Simulating bedrock:InvokeModel / Converse against $ROLE_ARN"
-          # Try foundation-model ARN first; if that's denied, also try the
-          # inference-profile ARN. At least one must be allowed.
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           FM_ARN="arn:aws:bedrock:${AWS_REGION}::foundation-model/${MODEL_ID}"
-          PROFILE_ARN_PREFIX="arn:aws:bedrock:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):inference-profile/${MODEL_ID}"
-          for arn in "$FM_ARN" "$PROFILE_ARN_PREFIX"; do
-            DECISION=$(aws iam simulate-principal-policy \
-              --policy-source-arn "$ROLE_ARN" \
-              --action-names bedrock:InvokeModel bedrock:Converse \
-              --resource-arns "$arn" \
-              --query 'EvaluationResults[?EvalDecision!=`allowed`].[EvalActionName,EvalDecision]' \
-              --output text 2>/dev/null || echo "ERROR")
-            if [[ -z "$DECISION" ]]; then
-              echo "::notice::IAM allows bedrock:InvokeModel + Converse on $arn"
-              exit 0
-            fi
-            echo "Denied for $arn: $DECISION"
-          done
-          echo "::error::Lambda role lacks bedrock:InvokeModel/Converse on both $FM_ARN and $PROFILE_ARN_PREFIX."
-          echo "::error::Check terraform/main/iam.tf BedrockInvoke statement."
+          PROFILE_ARN="arn:aws:bedrock:${AWS_REGION}:${ACCOUNT_ID}:inference-profile/${MODEL_ID}"
+
+          echo "Simulating bedrock:InvokeModel + bedrock:Converse against $ROLE_ARN"
+          echo "  candidate resources:"
+          echo "    - $FM_ARN"
+          echo "    - $PROFILE_ARN"
+
+          # Run the simulator once with both ARNs and both actions. We get back
+          # one EvaluationResult per (action, resource) pair (4 total). For
+          # this check to pass at least one resource must allow BOTH actions.
+          # CLI failures (e.g. missing iam:SimulatePrincipalPolicy on the
+          # caller, bad ARN format) are surfaced verbatim — never swallowed.
+          if ! RAW=$(aws iam simulate-principal-policy \
+                --policy-source-arn "$ROLE_ARN" \
+                --action-names bedrock:InvokeModel bedrock:Converse \
+                --resource-arns "$FM_ARN" "$PROFILE_ARN" \
+                --output json 2>&1); then
+            echo "::error::simulate-principal-policy CLI call failed:"
+            echo "$RAW"
+            exit 1
+          fi
+
+          echo "Evaluation results:"
+          echo "$RAW" | jq -r '.EvaluationResults[] | "  \(.EvalDecision)\t\(.EvalActionName)\ton\t\(.EvalResourceName)"'
+
+          # Pass condition: there exists a resource for which BOTH actions are
+          # 'allowed'. We group by resource and check the count of 'allowed'.
+          if echo "$RAW" | jq -e '
+                [.EvaluationResults[] | select(.EvalDecision == "allowed") | .EvalResourceName]
+                  | group_by(.) | map(select(length == 2)) | length > 0
+              ' >/dev/null; then
+            echo "::notice::Lambda role can invoke Bedrock (both actions allowed on at least one ARN)"
+            exit 0
+          fi
+
+          echo "::error::Lambda role lacks bedrock:InvokeModel + bedrock:Converse on every tested ARN."
+          echo "::error::Check terraform/main/iam.tf BedrockInvoke statement and the BEDROCK_MODEL_ID repo variable."
           exit 1
 
   # --- Lambda deploy: jar → S3 → update-function-code → publish → alias -----
