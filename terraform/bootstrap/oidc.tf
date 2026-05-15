@@ -102,6 +102,15 @@ data "aws_iam_policy_document" "deploy" {
       "ses:*",
       "sesv2:*",
       "cloudwatch:*",
+      # Read-only Bedrock perms used by the aws-preflight CI step to
+      # verify the configured model/profile exists before terraform apply.
+      "bedrock:ListFoundationModels",
+      "bedrock:ListInferenceProfiles",
+      "bedrock:GetFoundationModel",
+      "bedrock:GetInferenceProfile",
+      # IAM policy simulator used by aws-preflight to verify the Lambda
+      # role can actually invoke Bedrock on the configured resource ARNs.
+      "iam:SimulatePrincipalPolicy",
       "iam:GetRole",
       "iam:PassRole",
       "iam:CreateRole",
