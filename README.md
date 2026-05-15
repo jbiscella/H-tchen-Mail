@@ -11,7 +11,7 @@ HA chart.
 | Document | What it covers |
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | **Authoritative behavioral specification.** Architecture decision record, single-table data model, full error catalog, per-block Gherkin scenarios, code-style rules, observability + IAM + config appendix. The source of truth for *what* the system does and *why*. |
-| [`DEPLOY.md`](DEPLOY.md) | **Step-by-step deploy procedure on a fresh AWS account.** Day-0 async prereqs (SES production access, Bedrock model access), bootstrap apply, GitHub repo variables, sender-email secret, first push, verification, common snags, rollback. |
+| [`DEPLOY.md`](DEPLOY.md) | **Step-by-step deploy procedure on a fresh AWS account.** Day-0 async prereqs (SES production access, Bedrock model access), bootstrap apply, GitHub repo variables, sender-email secret, first push, verification, common snags, rollback. Also contains the **"Adding an instrument"** recipe (raw `aws dynamodb transact-write-items` until the `mon` CLI lands). |
 | [`terraform/bootstrap/README.md`](terraform/bootstrap/README.md) | Bootstrap stack reference: state bucket, lock table, GitHub OIDC provider, deploy IAM role + trust policy. Applied once per account, manually. |
 | [`terraform/main/README.md`](terraform/main/README.md) | Main stack reference: per-file resource catalog, the code-vs-shape deploy model and `lifecycle { ignore_changes }` rationale, manual prerequisites, ops notes. |
 | [`THIRD_PARTY_LICENSES.txt`](THIRD_PARTY_LICENSES.txt) | Auto-generated full enumeration of every direct + transitive Maven dependency with licenses. Refreshed on every `mvn verify`. |
@@ -91,18 +91,20 @@ stack — both have their own READMEs.
 
 CLAUDE.md §10 sketches a `mon` CLI that wraps the AWS SDK to manage
 instruments without an HTTP API. The CLI is **planned**, not yet
-implemented — for now, the registry / config / manual-run operations
-are exercised via direct AWS SDK calls (see `MonitoringMainHandler`'s
-input shape and the `InstrumentRegistry` / `InstrumentConfigService`
-public methods) or via `aws lambda invoke` with the equivalent payload.
+implemented — for now:
 
-```bash
-# Manual one-shot run of the daily pipeline against a specific instrument:
-aws lambda invoke \
-  --function-name monitoring-main:live \
-  --payload '{"instrument_ids": ["<uuid>"]}' \
-  /dev/null
-```
+- **Add an instrument** → see [`DEPLOY.md`](DEPLOY.md) §"Adding an
+  instrument" for a copy-pasteable `aws dynamodb transact-write-items`
+  recipe.
+- **Manual one-shot run** of the daily pipeline against a specific
+  instrument:
+
+  ```bash
+  aws lambda invoke \
+    --function-name monitoring-main:live \
+    --payload '{"instrument_ids": ["<uuid>"]}' \
+    /dev/null
+  ```
 
 ## License
 

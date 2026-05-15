@@ -20,7 +20,7 @@ locals {
     "/monitoring/bootstrap/size-1d" = "250"
     "/monitoring/bootstrap/size-1w" = "260"
 
-    "/monitoring/exchanges/supported" = "NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS"
+    "/monitoring/exchanges/supported" = "NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME"
     "/monitoring/exchanges/suffix-map" = jsonencode({
       NASDAQ = ""
       NYSE   = ""
@@ -30,6 +30,8 @@ locals {
       TSX    = ".TO"
       PAR    = ".PA"
       AMS    = ".AS"
+      SWX    = ".SW"
+      BME    = ".MC"
     })
 
     "/monitoring/ingest/circuit-breaker.threshold" = "3"
