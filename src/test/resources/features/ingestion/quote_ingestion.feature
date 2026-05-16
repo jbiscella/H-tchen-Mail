@@ -92,6 +92,24 @@ Feature: Block 3 — Quote ingestion via the market-data port
     When I run ingest_all_active
     Then the ingestion summary has processed=1, succeeded=0, failed=1
 
+  # CLAUDE.md §6 "Transient failure with retry": a transient ProviderUnavailable
+  # is retried up to 3 times with exponential backoff before being given up on.
+  Scenario: Transient provider failure recovers within the retry budget
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the provider fails the next 2 calls for symbol "AAPL" then recovers
+    And the provider returns these "1d" bars for "AAPL":
+      | bar_time             | open | high | low | close |
+      | 2026-05-05T00:00:00Z | 100  | 110  | 95  | 105   |
+    When I run ingest_all_active
+    Then the ingestion summary has processed=1, succeeded=1, failed=0
+    And the ingestion summary reports 1 bars inserted
+
+  Scenario: Transient provider failure exhausts the retry budget
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the provider fails the next 4 calls for symbol "AAPL" then recovers
+    When I run ingest_all_active
+    Then the ingestion summary has processed=1, succeeded=0, failed=1
+
   Scenario: Reject bars violating OHLC invariants (skipped, not raised)
     Given an instrument "AAPL" on "NASDAQ" already exists
     And the provider returns these "1d" bars for "AAPL":

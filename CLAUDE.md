@@ -2083,6 +2083,8 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 | `/monitoring/exchanges/news-suffix-map`           | String (json) | common market codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | shared by the Marketaux + Yahoo-RSS news adapters |
 | `/monitoring/ingest/circuit-breaker.threshold`    | String        | `3`                                              |                                    |
 | `/monitoring/ingest/failure-rate-alert`           | String        | `0.5`                                            |                                    |
+| `/monitoring/ingest/max-retries`                  | String        | `3`                                              | transient `fetchHistory` retries   |
+| `/monitoring/ingest/retry-base-delay-ms`          | String        | `1000`                                           | backoff base; doubles each retry   |
 | `/monitoring/bedrock/model-id`                    | String        | `anthropic.claude-haiku-4-5-20251001-v1:0`       |                                    |
 | `/monitoring/bedrock/region`                      | String        | `eu-central-1`                                   |                                    |
 | `/monitoring/bedrock/max-tokens`                  | String        | `1500`                                           |                                    |
