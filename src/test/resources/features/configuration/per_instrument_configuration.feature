@@ -122,3 +122,10 @@ Feature: Block 2 — Per-instrument configuration domain operations
   Scenario: Duplicate recipients are normalized
     When I update recipients to "a@x.com,a@x.com"
     Then the config has recipients "a@x.com"
+
+  # CLAUDE.md §5: optimistic locking via a version attribute is deferred, so
+  # two updates to the same field simply last-write-win — the second persists.
+  Scenario: Concurrent config updates are last-write-wins
+    When I update recipients to "first@x.com"
+    And I update recipients to "second@x.com"
+    Then the config has recipients "second@x.com"
