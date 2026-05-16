@@ -39,6 +39,36 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     Then the main summary has processed=1 and succeeded=1 and failed=0
     And the main summary reports 3 bars inserted
 
+  # The detector emits one event per matching bar; on a long bootstrap chain
+  # that can mean many stale events. LatestBarEventFilter (CLAUDE.md §10)
+  # keeps only the events on the chronologically last bar and logs
+  # main_events_suppressed for the rest. This 12-bar chain produces three
+  # Heikin-Ashi colour flips → three color_change events on three bars; only
+  # the latest survives, two are suppressed.
+  Scenario: Only the latest detected bar fires an alert; older bars are suppressed
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And the color_change pattern is enabled with min_streak_length 1
+    And the provider returns these "1d" bars for "AAPL":
+      | bar_time             | open | high | low | close |
+      | 2026-04-21T00:00:00Z | 300  | 302  | 278 | 280   |
+      | 2026-04-22T00:00:00Z | 280  | 282  | 258 | 260   |
+      | 2026-04-23T00:00:00Z | 260  | 262  | 238 | 240   |
+      | 2026-04-24T00:00:00Z | 240  | 262  | 238 | 260   |
+      | 2026-04-25T00:00:00Z | 260  | 282  | 258 | 280   |
+      | 2026-04-26T00:00:00Z | 280  | 302  | 278 | 300   |
+      | 2026-04-27T00:00:00Z | 300  | 302  | 278 | 280   |
+      | 2026-04-28T00:00:00Z | 280  | 282  | 258 | 260   |
+      | 2026-04-29T00:00:00Z | 260  | 262  | 238 | 240   |
+      | 2026-04-30T00:00:00Z | 240  | 262  | 238 | 260   |
+      | 2026-05-01T00:00:00Z | 260  | 282  | 258 | 280   |
+      | 2026-05-02T00:00:00Z | 280  | 302  | 278 | 300   |
+    When I run monitoring-main
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 1 events detected
+    And the main summary reports 1 alerts sent
+    And the logs contain a "main_events_suppressed" line with "kept=1 suppressed=2"
+
   Scenario: One instrument failure does not block others
     Given the following instruments exist:
       | ticker | exchange | status |
