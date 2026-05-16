@@ -82,6 +82,11 @@ public class QuoteIngestionSteps {
         }
     }
 
+    @Given("the provider fails the next {int} call(s) for symbol {string} then recovers")
+    public void provider_fails_next_n_calls_then_recovers(int n, String symbolOrTicker) {
+        world.marketData().primeTransientFor(resolveSymbol(symbolOrTicker), n);
+    }
+
     private String resolveSymbol(String symbolOrTicker) {
         if (symbolOrTicker.contains(".")) {
             return symbolOrTicker;

@@ -125,8 +125,11 @@ public final class World {
                         "PAR", ".PA",
                         "AMS", ".AS",
                         "SWX", ".SW",
-                        "BME", ".MC"));
-        ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg);
+                        "BME", ".MC"),
+                3,
+                1000L);
+        // No-op sleeper: the retry path runs at full speed in tests.
+        ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg, millis -> {});
         heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
         patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
         RetryConfig retryConfig = new RetryConfig();

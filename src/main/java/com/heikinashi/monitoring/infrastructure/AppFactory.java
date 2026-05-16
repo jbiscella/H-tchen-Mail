@@ -83,6 +83,8 @@ public class AppFactory {
             @Value("${monitoring.ingest.failure-rate-alert:0.5}") double failureRateAlert,
             @Value("${monitoring.bootstrap.size-1d:250}") int bootstrap1d,
             @Value("${monitoring.bootstrap.size-1w:260}") int bootstrap1w,
+            @Value("${monitoring.ingest.max-retries:3}") int maxRetries,
+            @Value("${monitoring.ingest.retry-base-delay-ms:1000}") long retryBaseDelayMillis,
             @Value("${monitoring.exchanges.suffix-map:{}}") String suffixMapJson) {
         Map<Timeframe, Integer> bootstrap = new HashMap<>();
         bootstrap.put(Timeframe.D1, bootstrap1d);
@@ -96,6 +98,7 @@ public class AppFactory {
         } catch (IOException e) {
             throw new IllegalStateException("Could not parse exchange suffix map JSON: " + suffixMapJson, e);
         }
-        return new IngestionConfig(circuitBreakerThreshold, failureRateAlert, bootstrap, suffixMap);
+        return new IngestionConfig(
+                circuitBreakerThreshold, failureRateAlert, bootstrap, suffixMap, maxRetries, retryBaseDelayMillis);
     }
 }
