@@ -44,7 +44,12 @@ public interface MarketDataProvider {
         return EarningsCalendar.empty();
     }
 
-    default List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
+    /**
+     * Recent news headlines for the instrument. {@code tf} is the pattern's
+     * timeframe — providers that scope recency to the signal's horizon (e.g.
+     * Marketaux's {@code published_after} filter) use it; others ignore it.
+     */
+    default List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
         return List.of();
     }
 

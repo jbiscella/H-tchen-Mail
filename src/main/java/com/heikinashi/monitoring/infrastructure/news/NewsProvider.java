@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.news;
 
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import java.util.List;
 
@@ -14,10 +15,12 @@ public interface NewsProvider {
     String name();
 
     /**
-     * Fetch up to {@code max} recent headlines for the instrument. May raise
+     * Fetch up to {@code max} recent headlines for the instrument. {@code tf}
+     * is the pattern's timeframe — a provider may use it to scope how far back
+     * it looks. May raise
      * {@link com.heikinashi.monitoring.domain.error.ProviderUnavailableException}
      * or {@link com.heikinashi.monitoring.domain.error.SchemaDriftException};
      * the aggregator treats any failure as "this provider contributed nothing".
      */
-    List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max);
+    List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf);
 }

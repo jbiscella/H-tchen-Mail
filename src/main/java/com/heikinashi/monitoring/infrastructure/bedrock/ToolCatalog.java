@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.bedrock;
 
 import com.heikinashi.monitoring.domain.MarketDataProvider;
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.AnalystRating;
 import com.heikinashi.monitoring.domain.fundamentals.EarningsCalendar;
 import com.heikinashi.monitoring.domain.fundamentals.InsiderTransaction;
@@ -39,7 +40,7 @@ final class ToolCatalog {
     private final Map<String, BiFunction<String, String, Document>> handlers = new LinkedHashMap<>();
     private final ToolConfiguration toolConfiguration;
 
-    ToolCatalog(MarketDataProvider provider) {
+    ToolCatalog(MarketDataProvider provider, Timeframe tf) {
         register(
                 "get_quote_info",
                 "Sector, industry, market cap, P/E, EPS, beta, dividend yield for a ticker.",
@@ -51,7 +52,7 @@ final class ToolCatalog {
         register(
                 "get_news_headlines",
                 "Recent news headlines for the ticker, with publication date and source.",
-                (ticker, exchange) -> headlinesToDocument(provider.fetchNewsHeadlines(ticker, exchange, TOP_N)));
+                (ticker, exchange) -> headlinesToDocument(provider.fetchNewsHeadlines(ticker, exchange, TOP_N, tf)));
         register(
                 "get_recommendations",
                 "Recent analyst recommendations and ratings for the ticker.",

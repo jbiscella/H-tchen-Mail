@@ -34,6 +34,8 @@ class LambdaEnvVarsContractTest {
             "MONITORING_EMAIL_SENDER_EMAIL",
             "MONITORING_EODHD_API_KEY",
             "MONITORING_MARKETAUX_API_KEY",
+            "MONITORING_MARKETAUX_RECENCY_DAYS_1D",
+            "MONITORING_MARKETAUX_RECENCY_DAYS_1W",
             "MONITORING_BEDROCK_MODEL_ID");
 
     @Test

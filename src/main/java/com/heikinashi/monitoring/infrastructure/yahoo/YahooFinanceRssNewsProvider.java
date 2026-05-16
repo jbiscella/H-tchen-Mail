@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.yahoo;
 
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
@@ -68,7 +69,9 @@ public class YahooFinanceRssNewsProvider implements NewsProvider {
     }
 
     @Override
-    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
+    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
+        // tf is unused: the Yahoo RSS headline feed has no date-range filter —
+        // it simply returns the latest headlines.
         String symbol = NewsSymbols.forExchange(ticker, exchange, suffixMap);
         URI uri = URI.create(
                 FEED_URL + "?s=" + URLEncoder.encode(symbol, StandardCharsets.UTF_8) + "&region=US&lang=en-US");
