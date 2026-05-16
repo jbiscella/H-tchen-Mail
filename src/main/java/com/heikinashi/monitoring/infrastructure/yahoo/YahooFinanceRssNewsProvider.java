@@ -1,10 +1,10 @@
 package com.heikinashi.monitoring.infrastructure.yahoo;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import com.heikinashi.monitoring.infrastructure.news.NewsProvider;
+import com.heikinashi.monitoring.infrastructure.news.NewsSymbols;
 import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
 import java.io.ByteArrayInputStream;
@@ -36,9 +36,10 @@ import org.w3c.dom.NodeList;
  * a browser-like {@code User-Agent} is mandatory or Yahoo answers 429.
  *
  * <p>Yahoo's ticker suffixes differ from EODHD's (".L" not ".LSE", ".DE" not
- * ".XETRA", no suffix for US), so the symbol is built from a dedicated
- * {@code monitoring.exchanges.yahoo-suffix-map}. The feed carries no per-item
- * source or sentiment, so {@code source} is reported as "Yahoo Finance".
+ * ".XETRA", no suffix for US), so the symbol is built via {@link NewsSymbols}
+ * from {@code monitoring.exchanges.news-suffix-map}. The feed carries no
+ * per-item source or sentiment, so {@code source} is reported as
+ * "Yahoo Finance".
  */
 @Singleton
 public class YahooFinanceRssNewsProvider implements NewsProvider {
@@ -53,9 +54,8 @@ public class YahooFinanceRssNewsProvider implements NewsProvider {
     private final Map<String, String> suffixMap;
     private final HttpClient http;
 
-    public YahooFinanceRssNewsProvider(
-            @Value("${monitoring.exchanges.yahoo-suffix-map:{}}") String yahooSuffixMapJson) {
-        this.suffixMap = parseSuffixMap(yahooSuffixMapJson);
+    public YahooFinanceRssNewsProvider(@Value("${monitoring.exchanges.news-suffix-map:{}}") String newsSuffixMapJson) {
+        this.suffixMap = NewsSymbols.parseSuffixMap(newsSuffixMapJson);
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(TIMEOUT_SECONDS))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -69,7 +69,7 @@ public class YahooFinanceRssNewsProvider implements NewsProvider {
 
     @Override
     public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
-        String symbol = ticker + suffixMap.getOrDefault(exchange, "");
+        String symbol = NewsSymbols.forExchange(ticker, exchange, suffixMap);
         URI uri = URI.create(
                 FEED_URL + "?s=" + URLEncoder.encode(symbol, StandardCharsets.UTF_8) + "&region=US&lang=en-US");
         long t0 = System.currentTimeMillis();
@@ -170,15 +170,5 @@ public class YahooFinanceRssNewsProvider implements NewsProvider {
             }
         }
         return null;
-    }
-
-    private static Map<String, String> parseSuffixMap(String json) {
-        try {
-            @SuppressWarnings("unchecked")
-            Map<String, String> parsed = new ObjectMapper().readValue(json, Map.class);
-            return Map.copyOf(parsed);
-        } catch (IOException e) {
-            throw new IllegalStateException("Could not parse yahoo-suffix-map JSON: " + json, e);
-        }
     }
 }

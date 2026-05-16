@@ -6,6 +6,8 @@ import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import com.heikinashi.monitoring.infrastructure.news.NewsProvider;
+import com.heikinashi.monitoring.infrastructure.news.NewsSymbols;
+import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.net.URI;
@@ -18,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,8 +31,10 @@ import org.slf4j.LoggerFactory;
  * {@link com.heikinashi.monitoring.infrastructure.CompositeMarketDataProvider}
  * alongside the EODHD history adapter.
  *
- * <p>The symbol passed to Marketaux is {@code TICKER.EXCHANGE} — Marketaux's
- * entity matcher accepts that form for both US and non-US listings.
+ * <p>The symbol is built via {@link NewsSymbols} from
+ * {@code monitoring.exchanges.news-suffix-map} — Marketaux wants the common
+ * market suffix ({@code CFR.SW}), not the internal exchange code
+ * ({@code CFR.SWX}), which it cannot resolve.
  */
 @Singleton
 public class MarketauxNewsProvider implements NewsProvider {
@@ -39,10 +44,13 @@ public class MarketauxNewsProvider implements NewsProvider {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final MarketauxConfig config;
+    private final Map<String, String> suffixMap;
     private final HttpClient http;
 
-    public MarketauxNewsProvider(MarketauxConfig config) {
+    public MarketauxNewsProvider(
+            MarketauxConfig config, @Value("${monitoring.exchanges.news-suffix-map:{}}") String newsSuffixMapJson) {
         this.config = config;
+        this.suffixMap = NewsSymbols.parseSuffixMap(newsSuffixMapJson);
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(config.getTimeoutSeconds()))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -56,7 +64,7 @@ public class MarketauxNewsProvider implements NewsProvider {
 
     @Override
     public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
-        String symbol = ticker + "." + exchange;
+        String symbol = NewsSymbols.forExchange(ticker, exchange, suffixMap);
         URI uri = buildUri(symbol, max);
         long t0 = System.currentTimeMillis();
         HttpResponse<String> response;
