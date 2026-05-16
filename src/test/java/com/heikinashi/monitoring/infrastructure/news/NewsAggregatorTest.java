@@ -2,6 +2,7 @@ package com.heikinashi.monitoring.infrastructure.news;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import java.time.Instant;
 import java.util.List;
@@ -22,7 +23,7 @@ class NewsAggregatorTest {
             }
 
             @Override
-            public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
+            public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
                 if (boom != null) {
                     throw boom;
                 }
@@ -43,7 +44,7 @@ class NewsAggregatorTest {
         NewsProvider b = provider("b", List.of(headline("newer", "2026-05-12T00:00:00Z", "u2")), null);
         NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a", "b"));
 
-        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10);
+        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
         assertThat(out).extracting(NewsHeadline::title).containsExactly("newer", "older");
     }
@@ -54,7 +55,7 @@ class NewsAggregatorTest {
         NewsProvider bad = provider("bad", List.of(), new RuntimeException("boom"));
         NewsAggregator agg = new NewsAggregator(List.of(ok, bad), config("ok", "bad"));
 
-        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10);
+        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
         assertThat(out).extracting(NewsHeadline::title).containsExactly("survives");
     }
@@ -65,7 +66,7 @@ class NewsAggregatorTest {
         NewsProvider b = provider("b", List.of(headline("dropped", "2026-05-13T00:00:00Z", "u2")), null);
         NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a"));
 
-        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10);
+        List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
         assertThat(out).extracting(NewsHeadline::title).containsExactly("kept");
     }
@@ -79,7 +80,7 @@ class NewsAggregatorTest {
         NewsProvider b = provider("b", List.of(headline("h3", "2026-05-10T00:00:00Z", "u3")), null);
         NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a", "b"));
 
-        assertThat(agg.fetchNewsHeadlines("CFR", "SWX", 2)).hasSize(2);
+        assertThat(agg.fetchNewsHeadlines("CFR", "SWX", 2, Timeframe.D1)).hasSize(2);
     }
 
     @Test

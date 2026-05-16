@@ -100,6 +100,18 @@ variable "marketaux_api_key" {
   sensitive   = true
 }
 
+variable "marketaux_recency_days_1d" {
+  description = "Marketaux published_after look-back window (days) for daily-timeframe alerts. Override via the MARKETAUX_RECENCY_DAYS_1D GitHub variable."
+  type        = number
+  default     = 7
+}
+
+variable "marketaux_recency_days_1w" {
+  description = "Marketaux published_after look-back window (days) for weekly-timeframe alerts. Override via the MARKETAUX_RECENCY_DAYS_1W GitHub variable."
+  type        = number
+  default     = 30
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log group retention for both Lambdas."
   type        = number
