@@ -19,7 +19,7 @@ import java.util.Optional;
  *   "corroborating": "string, optional",
  *   "contradicting": "string, optional",
  *   "confidence":    "LOW | MEDIUM | HIGH",
- *   "data_sources":  ["quote_info", "news", ...]
+ *   "data_sources":  ["news_headlines(5)", "recommendations(0)", ...]
  * }
  * }</pre>
  *

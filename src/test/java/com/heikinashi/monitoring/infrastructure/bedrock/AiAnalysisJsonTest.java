@@ -17,14 +17,14 @@ class AiAnalysisJsonTest {
                   "corroborating": "Earnings beat last quarter; positive news flow.",
                   "contradicting": "Sector beta is high; insider selling reported.",
                   "confidence": "MEDIUM",
-                  "data_sources": ["quote_info", "news"]
+                  "data_sources": ["news_headlines(5)", "recommendations(0)"]
                 }
                 """;
         AiAnalysis a = AiAnalysisJson.parse(raw);
         assertThat(a.confidence()).isEqualTo(AiConfidence.MEDIUM);
         assertThat(a.corroborating()).contains("Earnings beat last quarter; positive news flow.");
         assertThat(a.contradicting()).contains("Sector beta is high; insider selling reported.");
-        assertThat(a.dataSources()).containsExactly("quote_info", "news");
+        assertThat(a.dataSources()).containsExactly("news_headlines(5)", "recommendations(0)");
     }
 
     @Test
