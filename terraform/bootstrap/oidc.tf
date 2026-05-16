@@ -108,6 +108,11 @@ data "aws_iam_policy_document" "deploy" {
       "bedrock:ListInferenceProfiles",
       "bedrock:GetFoundationModel",
       "bedrock:GetInferenceProfile",
+      # Invoke perms for the aws-preflight "model access" smoke call: a
+      # 1-token converse against BEDROCK_MODEL_ID. The Converse API
+      # authorises against bedrock:InvokeModel, so both actions are needed.
+      "bedrock:InvokeModel",
+      "bedrock:Converse",
       # IAM policy simulator used by aws-preflight to verify the Lambda
       # role can actually invoke Bedrock on the configured resource ARNs.
       "iam:SimulatePrincipalPolicy",
