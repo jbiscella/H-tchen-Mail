@@ -60,6 +60,28 @@ class PatternEventJsonTest {
         assertThat(decoded.paramsUsed()).containsEntry("min_streak_length", "3");
     }
 
+    @Test
+    void forced_event_round_trips() {
+        // A force_email run enqueues a FORCED/FORCED event into PENDING_ALERT;
+        // the retry-poller must be able to read it back. Regression for the
+        // retry error-loop caused by PatternKind.fromWire rejecting "forced".
+        PatternEvent base = sampleEvent(Optional.empty());
+        PatternEvent forced = new PatternEvent(
+                base.instrumentId(),
+                base.ticker(),
+                base.exchange(),
+                base.timeframe(),
+                base.barTime(),
+                PatternKind.FORCED,
+                PatternSubtype.FORCED,
+                base.paramsUsed(),
+                base.barSnapshot(),
+                base.detectedAt());
+        PatternEvent decoded = PatternEventJson.fromJson(PatternEventJson.toJson(forced));
+        assertThat(decoded.pattern()).isEqualTo(PatternKind.FORCED);
+        assertThat(decoded.subtype()).isEqualTo(PatternSubtype.FORCED);
+    }
+
     private static PatternEvent sampleEvent(Optional<BigDecimal> volume) {
         return new PatternEvent(
                 "abc-123",
