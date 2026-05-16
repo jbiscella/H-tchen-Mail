@@ -286,9 +286,9 @@ jobs:
       # that first invocation to come from a principal holding
       # aws-marketplace:Subscribe. A model swap therefore passes this preflight
       # but fails at runtime with AccessDeniedException, silently queueing
-      # every alert. A 1-token converse smoke call is the only reliable check —
-      # and if the deploy role has Marketplace permissions, this call also
-      # enables the model account-wide as a side effect.
+      # every alert. A 1-token converse smoke call is the only reliable check.
+      # The deploy role is granted bedrock:InvokeModel + bedrock:Converse in
+      # the bootstrap stack (terraform/bootstrap/oidc.tf) so this call can run.
       - name: Bedrock model access is granted
         env:
           MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
@@ -314,8 +314,9 @@ jobs:
             echo "$ERR"
             exit 1
           elif echo "$ERR" | grep -qiE 'not authorized to perform'; then
-            echo "::error::The CI deploy role lacks bedrock:Converse — this preflight cannot run."
-            echo "::error::Add bedrock:Converse to gh-actions-monitoring-deploy in the bootstrap stack."
+            echo "::error::The CI deploy role lacks bedrock:InvokeModel/Converse — this preflight cannot run."
+            echo "::error::Apply the latest terraform/bootstrap stack: it grants those actions to"
+            echo "::error::gh-actions-monitoring-deploy. The bootstrap stack is applied manually."
             echo "$ERR"
             exit 1
           elif echo "$ERR" | grep -qiE 'Throttling|TooManyRequests'; then
