@@ -12,7 +12,7 @@ up and no UI to log into — the inbox *is* the interface.
 
 ## What an alert looks like
 
-![Example Heikin Ashi alert email](email-example.jpeg)
+![Example Heikin Ashi alert email](email-example.png)
 
 ## How it works
 
