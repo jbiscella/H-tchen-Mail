@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.news;
 
+import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
 import jakarta.inject.Singleton;
 import java.time.Duration;
@@ -35,7 +36,7 @@ public class NewsAggregator {
         this.config = config;
     }
 
-    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
+    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
         List<NewsProvider> enabled = providers.stream()
                 .filter(p -> config.getProviders().contains(p.name()))
                 .toList();
@@ -45,7 +46,7 @@ public class NewsAggregator {
 
         List<CompletableFuture<List<NewsHeadline>>> futures = new ArrayList<>(enabled.size());
         for (NewsProvider p : enabled) {
-            futures.add(CompletableFuture.supplyAsync(() -> p.fetchNewsHeadlines(ticker, exchange, max))
+            futures.add(CompletableFuture.supplyAsync(() -> p.fetchNewsHeadlines(ticker, exchange, max, tf))
                     .exceptionally(t -> {
                         LOG.warn(
                                 "news_provider_failed provider={} ticker={} exchange={} error={}",

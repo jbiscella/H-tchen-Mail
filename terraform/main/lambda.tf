@@ -48,13 +48,15 @@ resource "aws_lambda_function" "main" {
 
   environment {
     variables = {
-      LOG_LEVEL                     = "INFO"
-      MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
-      MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
-      MONITORING_EODHD_API_KEY      = var.eodhd_api_key
-      MONITORING_MARKETAUX_API_KEY  = var.marketaux_api_key
-      MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
-      MONITORING_SES_REGION         = var.ses_region
+      LOG_LEVEL                            = "INFO"
+      MONITORING_TABLE                     = aws_dynamodb_table.monitoring.name
+      MONITORING_EMAIL_SENDER_EMAIL        = var.ses_sender_email
+      MONITORING_EODHD_API_KEY             = var.eodhd_api_key
+      MONITORING_MARKETAUX_API_KEY         = var.marketaux_api_key
+      MONITORING_MARKETAUX_RECENCY_DAYS_1D = var.marketaux_recency_days_1d
+      MONITORING_MARKETAUX_RECENCY_DAYS_1W = var.marketaux_recency_days_1w
+      MONITORING_BEDROCK_MODEL_ID          = var.bedrock_model_id
+      MONITORING_SES_REGION                = var.ses_region
       # JFreeChart/AWT writes a fontconfig cache at startup; the Lambda
       # filesystem is read-only except /tmp, so point the cache there to
       # silence the repeated "No writable cache directories" warnings.
@@ -121,13 +123,15 @@ resource "aws_lambda_function" "retry" {
 
   environment {
     variables = {
-      LOG_LEVEL                     = "INFO"
-      MONITORING_TABLE              = aws_dynamodb_table.monitoring.name
-      MONITORING_EMAIL_SENDER_EMAIL = var.ses_sender_email
-      MONITORING_EODHD_API_KEY      = var.eodhd_api_key
-      MONITORING_MARKETAUX_API_KEY  = var.marketaux_api_key
-      MONITORING_BEDROCK_MODEL_ID   = var.bedrock_model_id
-      MONITORING_SES_REGION         = var.ses_region
+      LOG_LEVEL                            = "INFO"
+      MONITORING_TABLE                     = aws_dynamodb_table.monitoring.name
+      MONITORING_EMAIL_SENDER_EMAIL        = var.ses_sender_email
+      MONITORING_EODHD_API_KEY             = var.eodhd_api_key
+      MONITORING_MARKETAUX_API_KEY         = var.marketaux_api_key
+      MONITORING_MARKETAUX_RECENCY_DAYS_1D = var.marketaux_recency_days_1d
+      MONITORING_MARKETAUX_RECENCY_DAYS_1W = var.marketaux_recency_days_1w
+      MONITORING_BEDROCK_MODEL_ID          = var.bedrock_model_id
+      MONITORING_SES_REGION                = var.ses_region
       # JFreeChart/AWT writes a fontconfig cache at startup; the Lambda
       # filesystem is read-only except /tmp, so point the cache there to
       # silence the repeated "No writable cache directories" warnings.
