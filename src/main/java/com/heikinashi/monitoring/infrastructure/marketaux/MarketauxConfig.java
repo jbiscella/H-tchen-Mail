@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.marketaux;
 
+import com.heikinashi.monitoring.domain.Timeframe;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -9,6 +10,12 @@ import jakarta.validation.constraints.NotBlank;
  * the {@code MONITORING_MARKETAUX_API_KEY} env var (terraform/main/lambda.tf,
  * populated from the {@code MARKETAUX_KEY} GitHub secret) — no default, boot
  * fails fast if missing, same contract as the EODHD key.
+ *
+ * <p>{@code recency-days-1d} / {@code recency-days-1w} bound how far back the
+ * adapter's {@code published_after} filter reaches, per pattern timeframe — a
+ * daily signal wants very recent news, a weekly one tolerates an older window.
+ * Both are overridable via the {@code MONITORING_MARKETAUX_RECENCY_DAYS_1D/1W}
+ * env vars (wired from the {@code MARKETAUX_RECENCY_DAYS_1D/1W} GitHub vars).
  */
 @ConfigurationProperties("monitoring.marketaux")
 public class MarketauxConfig {
@@ -21,6 +28,12 @@ public class MarketauxConfig {
 
     @Min(1)
     private int timeoutSeconds = 10;
+
+    @Min(1)
+    private int recencyDays1d = 7;
+
+    @Min(1)
+    private int recencyDays1w = 30;
 
     public String getApiKey() {
         return apiKey;
@@ -44,5 +57,29 @@ public class MarketauxConfig {
 
     public void setTimeoutSeconds(int timeoutSeconds) {
         this.timeoutSeconds = timeoutSeconds;
+    }
+
+    public int getRecencyDays1d() {
+        return recencyDays1d;
+    }
+
+    public void setRecencyDays1d(int recencyDays1d) {
+        this.recencyDays1d = recencyDays1d;
+    }
+
+    public int getRecencyDays1w() {
+        return recencyDays1w;
+    }
+
+    public void setRecencyDays1w(int recencyDays1w) {
+        this.recencyDays1w = recencyDays1w;
+    }
+
+    /** The {@code published_after} look-back window, in days, for the given pattern timeframe. */
+    public int recencyDays(Timeframe tf) {
+        return switch (tf) {
+            case D1 -> recencyDays1d;
+            case W1 -> recencyDays1w;
+        };
     }
 }

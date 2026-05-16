@@ -2073,12 +2073,14 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 | `/monitoring/eodhd/api-key`                       | SecureString  | —                                                | env `MONITORING_EODHD_API_KEY`     |
 | `/monitoring/marketaux/base-url`                  | String        | `https://api.marketaux.com/v1`                   | Marketaux news API                 |
 | `/monitoring/marketaux/api-key`                   | SecureString  | —                                                | env `MONITORING_MARKETAUX_API_KEY` |
+| `/monitoring/marketaux/recency-days-1d`           | String        | `7`                                              | `published_after` window, daily timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1D` |
+| `/monitoring/marketaux/recency-days-1w`           | String        | `30`                                             | `published_after` window, weekly timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1W` |
 | `/monitoring/news/providers`                      | String (list) | `marketaux,yahoo-rss`                            | enabled news adapters              |
 | `/monitoring/bootstrap/size-1d`                   | String        | `250`                                            |                                    |
 | `/monitoring/bootstrap/size-1w`                   | String        | `260`                                            |                                    |
 | `/monitoring/exchanges/supported`                 | String (csv)  | `NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME`  |                                    |
 | `/monitoring/exchanges/suffix-map`                | String (json) | EODHD codes — `{"NASDAQ":".US","XETRA":".XETRA","LSE":".LSE",...}` |                   |
-| `/monitoring/exchanges/yahoo-suffix-map`          | String (json) | Yahoo codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | for the Yahoo RSS news adapter |
+| `/monitoring/exchanges/news-suffix-map`           | String (json) | common market codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | shared by the Marketaux + Yahoo-RSS news adapters |
 | `/monitoring/ingest/circuit-breaker.threshold`    | String        | `3`                                              |                                    |
 | `/monitoring/ingest/failure-rate-alert`           | String        | `0.5`                                            |                                    |
 | `/monitoring/bedrock/model-id`                    | String        | `anthropic.claude-haiku-4-5-20251001-v1:0`       |                                    |
