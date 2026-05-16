@@ -46,6 +46,8 @@ monitoring:
     circuit-breaker:
       threshold: 3
     failure-rate-alert: 0.5
+    max-retries: 3
+    retry-base-delay-ms: 1000
   bedrock:
     model-id: anthropic.claude-haiku-4-5-20251001-v1:0
     region: eu-central-1
