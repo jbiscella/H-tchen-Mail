@@ -49,6 +49,23 @@ Feature: Block 6 — alert dispatch and retry orchestration
     And the email sender recorded 1 full send for 2 recipients
     And the last send delivered exactly 1 recipient
 
+  Scenario: Email sender unavailable → enqueue retry
+    Given a staged pattern event for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal"
+    And the email sender is unavailable
+    When I dispatch the staged events
+    Then the dispatch summary has sent=0, queued=1, skipped=0
+    And no email is sent
+    And 1 alert is pending with retry_count 0 and last_error code "DEPENDENCY_UNAVAILABLE"
+
+  Scenario: Every recipient rejected → enqueue retry, nothing delivered
+    Given a staged pattern event for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "doji/doji"
+    And the email sender will reject recipient "alice@example.com"
+    And the email sender will reject recipient "bot@example.com"
+    When I dispatch the staged events
+    Then the dispatch summary has sent=0, queued=1, skipped=0
+    And the last send delivered exactly 0 recipients
+    And 1 alert is pending with retry_count 0 and last_error code "DEPENDENCY_UNAVAILABLE"
+
   Scenario: Retry poller skips items not yet due
     Given a pending alert exists for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal" and retry_at "2026-05-07T23:00:00Z" and retry_count 0
     When I run the retry poller

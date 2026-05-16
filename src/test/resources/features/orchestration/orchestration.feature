@@ -23,7 +23,7 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     Then the main summary has processed=3 and succeeded=3 and failed=0
     And the main summary reports 0 bars inserted
 
-  Scenario: Scheduled run with bars triggers downstream pipeline end-to-end
+  Scenario: Scheduled run ingests new closed bars and runs HA + detection
     Given an instrument "AAPL" on "NASDAQ" already exists
     And the recipients for "AAPL" are "alice@example.com"
     And the color_change pattern is enabled with min_streak_length 3
@@ -38,6 +38,9 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     When I run monitoring-main
     Then the main summary has processed=1 and succeeded=1 and failed=0
     And the main summary reports 3 bars inserted
+    # These bars form no colour streak, so detection runs but emits nothing.
+    And the main summary reports 0 events detected
+    And the main summary reports 0 alerts sent
 
   # The detector emits one event per matching bar; on a long bootstrap chain
   # that can mean many stale events. LatestBarEventFilter (CLAUDE.md §10)
@@ -123,13 +126,17 @@ Feature: Block 7 — monitoring-main pipeline orchestration
   Scenario: force_email synthesises one event per tracked timeframe when no real pattern fires
     Given an instrument "AAPL" on "NASDAQ" already exists
     And the recipients for "AAPL" are "alice@example.com"
+    And the tracked timeframes for "AAPL" are "1d,1w"
     And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
     And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And a previously stored "1w" bar for "AAPL" at "2026-05-04T00:00:00Z"
+    And HA has previously been computed on "1w" for "AAPL" from the full OHLC chain
     And the provider has no bars for any symbol
     When I run monitoring-main with force_email true
     Then the main summary has processed=1 and succeeded=1 and failed=0
-    And the main summary reports 1 events detected
-    And the main summary reports 1 alerts sent
+    # One synthetic FORCED event per tracked timeframe (1d + 1w).
+    And the main summary reports 2 events detected
+    And the main summary reports 2 alerts sent
 
   Scenario: force_email does NOT duplicate when a real pattern already fired
     Given an instrument "AAPL" on "NASDAQ" already exists

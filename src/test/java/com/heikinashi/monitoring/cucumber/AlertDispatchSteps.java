@@ -96,6 +96,11 @@ public class AlertDispatchSteps {
         world.emailSender().rejectRecipient(recipient);
     }
 
+    @Given("the email sender is unavailable")
+    public void email_sender_is_unavailable() {
+        world.emailSender().makeUnavailable();
+    }
+
     // -------- When ------------------------------------------------------------
 
     @When("I dispatch the staged events")
