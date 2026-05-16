@@ -63,8 +63,9 @@ class BedrockAiAnalystTest {
     void single_END_TURN_response_yields_AiAnalysis() {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
         ScriptedClient scripted = new ScriptedClient(client);
-        scripted.next(endTurnWithText(
-                "{\"corroborating\":\"strong earnings\",\"confidence\":\"HIGH\",\"data_sources\":[\"quote_info\"]}"));
+        scripted.next(endTurnWithText("{\"corroborating\":\"strong earnings\",\"contradicting\":\"no analyst "
+                + "ratings returned — would show institutional backing\",\"confidence\":\"HIGH\","
+                + "\"data_sources\":[\"news_headlines(5)\",\"recommendations(0)\"]}"));
 
         BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
         AiAnalysis result = analyst.analyze(EVENT);
@@ -83,7 +84,7 @@ class BedrockAiAnalystTest {
                 Document.fromMap(Map.of(
                         "ticker", Document.fromString("AAPL"),
                         "exchange", Document.fromString("NASDAQ")))));
-        scripted.next(endTurnWithText("{\"confidence\":\"MEDIUM\",\"data_sources\":[\"quote_info\"]}"));
+        scripted.next(endTurnWithText("{\"confidence\":\"MEDIUM\",\"data_sources\":[\"quote_info(1)\"]}"));
 
         BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
         AiAnalysis result = analyst.analyze(EVENT);
