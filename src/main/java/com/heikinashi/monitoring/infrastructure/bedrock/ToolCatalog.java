@@ -51,7 +51,7 @@ final class ToolCatalog {
                 (ticker, exchange) -> earningsToDocument(provider.fetchEarningsCalendar(ticker, exchange)));
         register(
                 "get_news_headlines",
-                "Recent news headlines for the ticker, with publication date and source.",
+                "Recent news headlines for the ticker — each with publication date, source, url and a short summary.",
                 (ticker, exchange) -> headlinesToDocument(provider.fetchNewsHeadlines(ticker, exchange, TOP_N, tf)));
         register(
                 "get_recommendations",
@@ -149,6 +149,8 @@ final class ToolCatalog {
         return Document.fromMap(m);
     }
 
+    private static final int SUMMARY_MAX_CHARS = 400;
+
     private static Document headlinesToDocument(List<NewsHeadline> news) {
         List<Document> items = new ArrayList<>();
         for (NewsHeadline h : truncate(news)) {
@@ -157,6 +159,14 @@ final class ToolCatalog {
             m.put("date", Document.fromString(h.publishedAt().toString()));
             m.put("source", Document.fromString(h.source()));
             m.put("url", Document.fromString(h.url()));
+            // Provider blurb, capped so a long snippet can't blow up the
+            // Bedrock input-token bill (the tool result is re-sent each loop).
+            if (!h.summary().isEmpty()) {
+                String summary = h.summary().length() > SUMMARY_MAX_CHARS
+                        ? h.summary().substring(0, SUMMARY_MAX_CHARS)
+                        : h.summary();
+                m.put("summary", Document.fromString(summary));
+            }
             items.add(Document.fromMap(m));
         }
         Map<String, Document> root = new LinkedHashMap<>();

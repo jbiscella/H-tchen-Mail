@@ -30,6 +30,10 @@ class YahooFinanceRssNewsProviderTest {
         assertThat(first.url()).isEqualTo("https://finance.yahoo.com/news/richemont-shares-climb-0001.html");
         assertThat(first.source()).isEqualTo("Yahoo Finance");
         assertThat(first.publishedAt()).isEqualTo(Instant.parse("2026-05-14T07:10:00Z"));
+        assertThat(first.summary())
+                .isEqualTo("The luxury group's jewellery maisons drove a stronger-than-expected quarter.");
+        // Items 2 and 3 have no <description> in the feed — summary is empty, not null.
+        assertThat(news.get(1).summary()).isEmpty();
     }
 
     @Test
