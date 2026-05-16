@@ -1,18 +1,45 @@
 # Heikin Ashi Monitoring Service
 
-A serverless pipeline that watches a personal watchlist of equities and emails
-you a rich, AI-annotated alert whenever a stock prints a notable Heikin Ashi
-candle pattern.
+**A daily watchlist sentinel for retail investors.** You hand it a handful of
+stocks; it watches them for you and emails you only when one does something
+worth a second look — so you don't have to sit staring at charts.
 
-Every day it ingests fresh end-of-day prices, recomputes Heikin Ashi candles,
-runs three pattern detectors over them, and — when a pattern fires — composes
-an HTML email with an inline chart and a short fundamental-analysis note
-written by Claude. It runs entirely on AWS Lambda: there is no server to keep
-up and no UI to log into — the inbox *is* the interface.
+Most days nothing happens and no mail arrives. When a stock forms a
+meaningful *Heikin Ashi* candle pattern — a possible trend reversal, a burst
+of one-sided momentum, or a moment of market indecision — you get a single
+email: the chart, the numbers, and a short plain-language note from an AI
+analyst that pulls in recent news to give the signal context. It runs
+entirely on AWS Lambda — no server, no dashboard, no app to open. **The inbox
+is the interface.**
+
+It is a *notification* tool, not an advisor: every alert is a prompt to go
+look, never an instruction to trade.
 
 ## What an alert looks like
 
 ![Example Heikin Ashi alert email](email-example.png)
+
+## Understanding the alerts
+
+**Heikin Ashi** (Japanese for "average bar") is a way of redrawing the normal
+price candles so each one is blended with the bar before it. The result is a
+smoother chart where trends and turning points stand out and day-to-day noise
+fades — easier to read at a glance than raw candlesticks.
+
+The service watches for three patterns on those smoothed candles:
+
+| Pattern | Plain meaning | Why it's worth an email |
+|---|---|---|
+| **Color change** | A run of same-coloured candles (green = rising, red = falling) is broken by the opposite colour. | Heikin Ashi trends tend to hold one colour; the first flip after a streak is a classic early hint that the trend may be turning. |
+| **Strong candle** | A big-bodied candle with almost no wick — price moved one direction decisively for the whole period. | Signals conviction and momentum behind the move, not a half-hearted drift. |
+| **Doji** | A candle with a tiny body — it opened and closed at nearly the same price. | A tug-of-war between buyers and sellers: indecision, which often sits right before a turn. |
+
+Each pattern is tunable per stock (how long a streak must run, how small a
+body counts as a doji, and so on), and you choose which ones you care about.
+The email tells you which pattern fired, on which timeframe (daily or
+weekly), and highlights the exact candle that triggered it — then the AI note
+weighs recent news for and against the signal so you have context before you
+decide whether to act.
 
 ## How it works
 
