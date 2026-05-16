@@ -280,12 +280,15 @@ jobs:
           fi
 
       # The step above only proves the model *exists* — list-foundation-models
-      # returns every model regardless of subscription. Account-level model
-      # access (an AWS Marketplace subscription, granted manually in the
-      # Bedrock console per CLAUDE.md §12) is invisible to it. A model swap to
-      # an un-subscribed model therefore passes this preflight but fails at
-      # runtime with AccessDeniedException, silently queueing every alert.
-      # A 1-token converse smoke call is the only reliable access check.
+      # returns every model regardless of whether it is enabled. The Bedrock
+      # "Model access" page is retired: serverless models self-enable on first
+      # invocation, but AWS Marketplace models (Anthropic among them) require
+      # that first invocation to come from a principal holding
+      # aws-marketplace:Subscribe. A model swap therefore passes this preflight
+      # but fails at runtime with AccessDeniedException, silently queueing
+      # every alert. A 1-token converse smoke call is the only reliable check —
+      # and if the deploy role has Marketplace permissions, this call also
+      # enables the model account-wide as a side effect.
       - name: Bedrock model access is granted
         env:
           MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
@@ -302,9 +305,12 @@ jobs:
           if [[ $RC -eq 0 ]]; then
             echo "::notice::Bedrock converse succeeded — model access granted for $MODEL_ID"
           elif echo "$ERR" | grep -qiE 'access is denied|aws-marketplace'; then
-            echo "::error::Bedrock model access is NOT granted for '$MODEL_ID' in $AWS_REGION."
-            echo "::error::Grant it manually: AWS Console -> Bedrock -> $AWS_REGION -> Model access -> request access."
-            echo "::error::This is an account-level Marketplace subscription Terraform cannot manage (CLAUDE.md §12)."
+            echo "::error::Bedrock model '$MODEL_ID' is not yet enabled in $AWS_REGION."
+            echo "::error::AWS Marketplace models self-enable on first invocation, but that"
+            echo "::error::invocation must come from a principal with aws-marketplace:Subscribe."
+            echo "::error::Fix: open the model in the Bedrock playground as an admin user and"
+            echo "::error::invoke it once (submit the use-case form if prompted) — that enables"
+            echo "::error::it account-wide. Terraform cannot manage this (CLAUDE.md §12)."
             echo "$ERR"
             exit 1
           elif echo "$ERR" | grep -qiE 'not authorized to perform'; then
