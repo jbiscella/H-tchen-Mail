@@ -2078,7 +2078,7 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 | `/monitoring/bootstrap/size-1w`                   | String        | `260`                                            |                                    |
 | `/monitoring/exchanges/supported`                 | String (csv)  | `NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME`  |                                    |
 | `/monitoring/exchanges/suffix-map`                | String (json) | EODHD codes — `{"NASDAQ":".US","XETRA":".XETRA","LSE":".LSE",...}` |                   |
-| `/monitoring/exchanges/yahoo-suffix-map`          | String (json) | Yahoo codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | for the Yahoo RSS news adapter |
+| `/monitoring/exchanges/news-suffix-map`           | String (json) | common market codes — `{"NASDAQ":"","XETRA":".DE","LSE":".L",...}` | shared by the Marketaux + Yahoo-RSS news adapters |
 | `/monitoring/ingest/circuit-breaker.threshold`    | String        | `3`                                              |                                    |
 | `/monitoring/ingest/failure-rate-alert`           | String        | `0.5`                                            |                                    |
 | `/monitoring/bedrock/model-id`                    | String        | `anthropic.claude-haiku-4-5-20251001-v1:0`       |                                    |

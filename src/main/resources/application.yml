@@ -28,9 +28,10 @@ monitoring:
     # NASDAQ + NYSE + ARCA + OTC, and ".LSE" / ".XETRA" (not the Yahoo
     # ".L" / ".DE") for London and Frankfurt.
     suffix-map: '{"NASDAQ":".US","NYSE":".US","MIL":".MI","XETRA":".XETRA","LSE":".LSE","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
-    # Yahoo Finance ticker suffix per exchange — differs from EODHD's: Yahoo
-    # uses no suffix for US, ".L" for London, ".DE" for Frankfurt.
-    yahoo-suffix-map: '{"NASDAQ":"","NYSE":"","MIL":".MI","XETRA":".DE","LSE":".L","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
+    # News-provider ticker suffix per exchange — the common market convention
+    # (Yahoo / Marketaux): no suffix for US, ".L" for London, ".DE" for
+    # Frankfurt. Distinct from EODHD's history suffixes above.
+    news-suffix-map: '{"NASDAQ":"","NYSE":"","MIL":".MI","XETRA":".DE","LSE":".L","TSX":".TO","PAR":".PA","AMS":".AS","SWX":".SW","BME":".MC"}'
   news:
     # News adapters to query and merge. Remove an entry to disable a provider
     # without deleting its code.
