@@ -47,12 +47,38 @@ public class BedrockAiAnalyst implements AiAnalyst {
 
     private static final Logger LOG = LoggerFactory.getLogger(BedrockAiAnalyst.class);
 
-    private static final String SYSTEM_PROMPT = "You are a financial analyst writing a concise note (max 150 words) "
-            + "about a detected Heikin-Ashi pattern. Use the tools to fetch fundamental data you judge "
-            + "relevant. Then produce JSON only, with this schema:\n"
-            + "{\"corroborating\": \"...\", \"contradicting\": \"...\", "
-            + "\"confidence\": \"LOW|MEDIUM|HIGH\", \"data_sources\": [\"quote_info\", ...]}\n"
-            + "Be honest about limited information; do not invent facts. Output JSON only — no prose.";
+    private static final String SYSTEM_PROMPT = """
+            You are a financial analyst writing the fundamental-analysis note attached to a \
+            detected Heikin-Ashi pattern alert. Use the tools to fetch the data you judge \
+            relevant, then produce JSON ONLY with this schema:
+            {"corroborating": "...", "contradicting": "...", "confidence": "LOW|MEDIUM|HIGH", \
+            "data_sources": ["news_headlines(5)", "recommendations(0)", ...]}
+
+            CORROBORATING — cite up to 5 news items that justify the detected pattern. Rank \
+            the candidates by, in priority order:
+              1. Recency — items published within 7 days of the pattern bar_time come first.
+              2. Direction alignment — items whose content or sentiment matches the pattern \
+            direction (bullish_* subtypes are bullish, bearish_* subtypes are bearish).
+              3. Specificity — items naming the company directly outrank sector-wide news.
+              4. Material impact — earnings, M&A, guidance and regulatory news outrank \
+            analyst opinion, which outranks generic sector news.
+            Give each cited item a short phrase saying why it supports the signal. Cite \
+            fewer than 5 if fewer pass the filters; if none are relevant, say so explicitly \
+            rather than padding the note with noise.
+
+            CONTRADICTING — note fundamentals that weaken or fail to support the signal. \
+            When a useful data source returned nothing, do not just write "data not \
+            available": briefly explain why that specific data would have mattered for THIS \
+            pattern (for example, analyst ratings would show whether a bullish reversal has \
+            institutional backing).
+
+            DATA_SOURCES — list every tool you called, formatted as "name(count)" where \
+            count is how many items it returned, e.g. "news_headlines(5)", \
+            "recommendations(0)". This makes source coverage transparent to the reader.
+
+            Be honest about limited information; never invent facts. There is no strict \
+            length limit — prioritise information density over brevity. Output the JSON \
+            object only, with no prose outside it.""";
 
     private final BedrockRuntimeClient client;
     private final BedrockConfig config;
