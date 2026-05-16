@@ -27,12 +27,17 @@ public enum PatternKind {
         return wire;
     }
 
+    /**
+     * Resolve a wire string to its {@link PatternKind}. Round-trips every
+     * kind, {@link #FORCED} included — this is the parser for persisted /
+     * serialized data (e.g. a {@code PENDING_ALERT}'s event JSON), which must
+     * read back anything {@link #wire()} ever wrote.
+     *
+     * <p>Rejecting {@code forced} as a <em>user-config</em> pattern name is a
+     * separate concern, enforced by {@code InstrumentConfigService} — not here.
+     */
     public static PatternKind fromWire(String value) {
         for (PatternKind k : values()) {
-            // FORCED is synthetic — never appears in user config — so user input
-            // pretending to enable/disable it is rejected the same as any
-            // unknown name.
-            if (k == FORCED) continue;
             if (k.wire.equals(value)) {
                 return k;
             }
