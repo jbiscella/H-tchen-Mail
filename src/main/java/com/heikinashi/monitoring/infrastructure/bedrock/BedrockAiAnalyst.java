@@ -82,12 +82,12 @@ public class BedrockAiAnalyst implements AiAnalyst {
 
     private final BedrockRuntimeClient client;
     private final BedrockConfig config;
-    private final ToolCatalog catalog;
+    private final MarketDataProvider provider;
 
     public BedrockAiAnalyst(BedrockRuntimeClient client, BedrockConfig config, MarketDataProvider provider) {
         this.client = client;
         this.config = config;
-        this.catalog = new ToolCatalog(provider);
+        this.provider = provider;
     }
 
     @Override
@@ -102,11 +102,14 @@ public class BedrockAiAnalyst implements AiAnalyst {
     }
 
     private AiAnalysis runLoop(PatternEvent event) {
+        // The tool catalog is per-event: news tools scope recency to the
+        // pattern's timeframe (CLAUDE.md §9 / Marketaux published_after).
+        ToolCatalog catalog = new ToolCatalog(provider, event.timeframe());
         List<Message> messages = new ArrayList<>();
         messages.add(buildUserMessage(event));
 
         for (int i = 0; i < config.getMaxToolIterations(); i++) {
-            ConverseResponse resp = client.converse(buildRequest(messages, true));
+            ConverseResponse resp = client.converse(buildRequest(messages, true, catalog));
             Message assistant = resp.output().message();
             messages.add(assistant);
             StopReason stop = resp.stopReason();
@@ -117,7 +120,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 throw new LLMException("MAX_TOKENS reached before final answer");
             }
             if (stop == StopReason.TOOL_USE) {
-                messages.add(buildToolResultsMessage(assistant));
+                messages.add(buildToolResultsMessage(assistant, catalog));
                 continue;
             }
             throw new LLMException("Unexpected Bedrock stop reason: " + stop);
@@ -125,7 +128,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
 
         // Iteration cap hit: force a final response without toolConfig.
         LOG.warn("bedrock_tool_iteration_cap_reached cap={}", config.getMaxToolIterations());
-        ConverseResponse forced = client.converse(buildRequest(messages, false));
+        ConverseResponse forced = client.converse(buildRequest(messages, false, catalog));
         Message forcedMessage = forced.output().message();
         if (forced.stopReason() == StopReason.MAX_TOKENS) {
             throw new LLMException("MAX_TOKENS reached on forced wrap-up");
@@ -133,7 +136,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
         return parseFinalAnalysis(forcedMessage);
     }
 
-    private ConverseRequest buildRequest(List<Message> messages, boolean withTools) {
+    private ConverseRequest buildRequest(List<Message> messages, boolean withTools, ToolCatalog catalog) {
         ConverseRequest.Builder b = ConverseRequest.builder()
                 .modelId(config.getModelId())
                 .system(SystemContentBlock.fromText(SYSTEM_PROMPT))
@@ -169,7 +172,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 .build();
     }
 
-    private Message buildToolResultsMessage(Message assistant) {
+    private Message buildToolResultsMessage(Message assistant, ToolCatalog catalog) {
         List<ContentBlock> results = new ArrayList<>();
         for (ContentBlock block : assistant.content()) {
             ToolUseBlock toolUse = block.toolUse();

@@ -157,9 +157,14 @@ Variables tab → **New repository variable**:
 | `LAMBDA_RETRY_NAME` | `retry-poller` |
 | `SES_SENDER_EMAIL` | the sender address you verified in §1.2 |
 | `BEDROCK_MODEL_ID` | the model / inference-profile id you have access to |
+| `MARKETAUX_RECENCY_DAYS_1D` | optional — `published_after` window in days for daily-timeframe alerts (default `7`) |
+| `MARKETAUX_RECENCY_DAYS_1W` | optional — `published_after` window in days for weekly-timeframe alerts (default `30`) |
 
 Variables left unset fall through to the `env:` defaults in
-`.github/workflows/ci.yml`.
+`.github/workflows/ci.yml`. The two `MARKETAUX_RECENCY_DAYS_*`
+variables bound how far back the news lookup reaches: a smaller value
+means only very fresh headlines reach the AI, a larger one widens the
+context window.
 
 ### The `DEPLOY_ENABLED` gate
 

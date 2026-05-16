@@ -2073,6 +2073,8 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 | `/monitoring/eodhd/api-key`                       | SecureString  | —                                                | env `MONITORING_EODHD_API_KEY`     |
 | `/monitoring/marketaux/base-url`                  | String        | `https://api.marketaux.com/v1`                   | Marketaux news API                 |
 | `/monitoring/marketaux/api-key`                   | SecureString  | —                                                | env `MONITORING_MARKETAUX_API_KEY` |
+| `/monitoring/marketaux/recency-days-1d`           | String        | `7`                                              | `published_after` window, daily timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1D` |
+| `/monitoring/marketaux/recency-days-1w`           | String        | `30`                                             | `published_after` window, weekly timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1W` |
 | `/monitoring/news/providers`                      | String (list) | `marketaux,yahoo-rss`                            | enabled news adapters              |
 | `/monitoring/bootstrap/size-1d`                   | String        | `250`                                            |                                    |
 | `/monitoring/bootstrap/size-1w`                   | String        | `260`                                            |                                    |
