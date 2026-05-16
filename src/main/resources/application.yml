@@ -19,6 +19,10 @@ monitoring:
     # populated from the MARKETAUX_KEY GitHub secret). No default — boot fails fast if missing.
     base-url: https://api.marketaux.com/v1
     timeout-seconds: 10
+    # published_after look-back window per pattern timeframe (days). Overridable
+    # via the MONITORING_MARKETAUX_RECENCY_DAYS_1D / _1W env vars.
+    recency-days-1d: 7
+    recency-days-1w: 30
   bootstrap:
     size-1d: 250
     size-1w: 260

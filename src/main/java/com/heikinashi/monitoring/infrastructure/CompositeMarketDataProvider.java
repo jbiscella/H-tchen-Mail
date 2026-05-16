@@ -41,7 +41,7 @@ public class CompositeMarketDataProvider implements MarketDataProvider {
     }
 
     @Override
-    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max) {
-        return news.fetchNewsHeadlines(ticker, exchange, max);
+    public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
+        return news.fetchNewsHeadlines(ticker, exchange, max, tf);
     }
 }
