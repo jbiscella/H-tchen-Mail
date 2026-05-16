@@ -279,6 +279,53 @@ jobs:
             exit 1
           fi
 
+      # The step above only proves the model *exists* — list-foundation-models
+      # returns every model regardless of whether it is enabled. The Bedrock
+      # "Model access" page is retired: serverless models self-enable on first
+      # invocation, but AWS Marketplace models (Anthropic among them) require
+      # that first invocation to come from a principal holding
+      # aws-marketplace:Subscribe. A model swap therefore passes this preflight
+      # but fails at runtime with AccessDeniedException, silently queueing
+      # every alert. A 1-token converse smoke call is the only reliable check —
+      # and if the deploy role has Marketplace permissions, this call also
+      # enables the model account-wide as a side effect.
+      - name: Bedrock model access is granted
+        env:
+          MODEL_ID: ${{ vars.BEDROCK_MODEL_ID || 'anthropic.claude-opus-4-7' }}
+        run: |
+          echo "Smoke-testing converse on '$MODEL_ID' in $AWS_REGION"
+          set +e
+          ERR=$(aws bedrock-runtime converse \
+            --region "$AWS_REGION" \
+            --model-id "$MODEL_ID" \
+            --messages '[{"role":"user","content":[{"text":"ping"}]}]' \
+            --inference-config '{"maxTokens":1}' 2>&1 >/dev/null)
+          RC=$?
+          set -e
+          if [[ $RC -eq 0 ]]; then
+            echo "::notice::Bedrock converse succeeded — model access granted for $MODEL_ID"
+          elif echo "$ERR" | grep -qiE 'access is denied|aws-marketplace'; then
+            echo "::error::Bedrock model '$MODEL_ID' is not yet enabled in $AWS_REGION."
+            echo "::error::AWS Marketplace models self-enable on first invocation, but that"
+            echo "::error::invocation must come from a principal with aws-marketplace:Subscribe."
+            echo "::error::Fix: open the model in the Bedrock playground as an admin user and"
+            echo "::error::invoke it once (submit the use-case form if prompted) — that enables"
+            echo "::error::it account-wide. Terraform cannot manage this (CLAUDE.md §12)."
+            echo "$ERR"
+            exit 1
+          elif echo "$ERR" | grep -qiE 'not authorized to perform'; then
+            echo "::error::The CI deploy role lacks bedrock:Converse — this preflight cannot run."
+            echo "::error::Add bedrock:Converse to gh-actions-monitoring-deploy in the bootstrap stack."
+            echo "$ERR"
+            exit 1
+          elif echo "$ERR" | grep -qiE 'Throttling|TooManyRequests'; then
+            echo "::warning::Bedrock throttled the smoke call — access looks granted; skipping hard check."
+          else
+            echo "::error::Bedrock converse smoke call failed for '$MODEL_ID':"
+            echo "$ERR"
+            exit 1
+          fi
+
       - name: SES sender identity is verified
         env:
           SES_REGION: ${{ vars.SES_REGION || 'eu-central-1' }}
