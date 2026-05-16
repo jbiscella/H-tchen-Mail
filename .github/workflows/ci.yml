@@ -198,6 +198,41 @@ jobs:
               body,
             });
 
+  # --- Deploy-gate notice: make a skipped deploy visible -------------------
+  #
+  # The AWS-touching jobs below are gated on `vars.DEPLOY_ENABLED == 'true'`.
+  # A gated-out job is *skipped*, not failed — so without this job a push to
+  # main where DEPLOY_ENABLED is unset shows an all-green run that deployed
+  # nothing. This job always runs on push to main and emits a loud warning
+  # in that case, so "green" is never silently mistaken for "deployed".
+
+  deploy-status:
+    name: deploy status notice
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Report whether the deploy jobs will run
+        env:
+          DEPLOY_ENABLED: ${{ vars.DEPLOY_ENABLED }}
+          ROLE_ARN: ${{ secrets.DEPLOY_ROLE_ARN }}
+          STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          ARTIFACTS: ${{ secrets.ARTIFACTS_BUCKET }}
+        run: |
+          if [[ "$DEPLOY_ENABLED" != "true" ]]; then
+            echo "::warning title=Deploy skipped::DEPLOY_ENABLED is not 'true' — terraform-apply and deploy-lambda did NOT run, nothing was deployed to AWS. A green run here means the build passed, not that the Lambda was updated. Set the DEPLOY_ENABLED repository variable to 'true' (see DEPLOY.md §4)."
+            exit 0
+          fi
+          missing=()
+          [[ -z "$ROLE_ARN" ]] && missing+=("DEPLOY_ROLE_ARN")
+          [[ -z "$STATE_BUCKET" ]] && missing+=("TF_STATE_BUCKET")
+          [[ -z "$ARTIFACTS" ]] && missing+=("ARTIFACTS_BUCKET")
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::warning title=Deploy misconfigured::DEPLOY_ENABLED is 'true' but these required secrets are empty: ${missing[*]}. The deploy jobs will run and then fail — set the secrets (see DEPLOY.md §4)."
+            exit 0
+          fi
+          echo "::notice title=Deploy enabled::DEPLOY_ENABLED=true and the deploy secrets are set — terraform-apply + deploy-lambda will run for this push."
+
   # --- AWS preflight (pre-apply): verify account-level preconditions --------
   #
   # These two checks confirm resources that Terraform can't create on its own
