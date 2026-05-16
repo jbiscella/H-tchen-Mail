@@ -169,11 +169,23 @@ public class MarketauxNewsProvider implements NewsProvider {
                         article.get("title").asText(),
                         publishedAt,
                         article.get("source").asText(),
-                        article.get("url").asText()));
+                        article.get("url").asText(),
+                        summaryOf(article)));
             } catch (RuntimeException e) {
                 LOG.debug("marketaux_skipping_article reason=unparsable published_at");
             }
         }
         return out;
+    }
+
+    /** Marketaux's per-article blurb: prefer {@code description}, fall back to {@code snippet}, else empty. */
+    private static String summaryOf(JsonNode article) {
+        if (article.hasNonNull("description")) {
+            return article.get("description").asText();
+        }
+        if (article.hasNonNull("snippet")) {
+            return article.get("snippet").asText();
+        }
+        return "";
     }
 }

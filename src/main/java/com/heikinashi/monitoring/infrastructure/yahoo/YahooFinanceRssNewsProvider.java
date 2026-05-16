@@ -151,10 +151,11 @@ public class YahooFinanceRssNewsProvider implements NewsProvider {
                 LOG.debug("yahoo_rss_skipping_item reason=missing_field");
                 continue;
             }
+            String description = childText(item, "description");
             try {
                 Instant publishedAt = ZonedDateTime.parse(pubDate, DateTimeFormatter.RFC_1123_DATE_TIME)
                         .toInstant();
-                out.add(new NewsHeadline(title, publishedAt, SOURCE, link));
+                out.add(new NewsHeadline(title, publishedAt, SOURCE, link, description == null ? "" : description));
             } catch (RuntimeException e) {
                 LOG.debug("yahoo_rss_skipping_item reason=unparsable_pubDate");
             }
