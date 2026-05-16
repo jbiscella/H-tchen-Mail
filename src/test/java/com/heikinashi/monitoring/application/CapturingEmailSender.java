@@ -5,6 +5,7 @@ import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.EmailSender;
 import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.error.DependencyUnavailableException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -23,10 +24,16 @@ public final class CapturingEmailSender implements EmailSender {
 
     private final List<Sent> sends = new ArrayList<>();
     private final Set<String> rejectedRecipients = new HashSet<>();
+    private boolean unavailable;
     private int messageIdCounter;
 
     public void rejectRecipient(String recipient) {
         rejectedRecipients.add(recipient);
+    }
+
+    /** Make every send attempt throw, as if SES itself were unreachable. */
+    public void makeUnavailable() {
+        unavailable = true;
     }
 
     public List<Sent> sends() {
@@ -51,6 +58,9 @@ public final class CapturingEmailSender implements EmailSender {
 
     private List<DeliveryResult> record(
             PatternEvent event, AlertEnrichment enrichment, boolean degraded, Set<String> recipients) {
+        if (unavailable) {
+            throw new DependencyUnavailableException("ses", null);
+        }
         List<DeliveryResult> deliveries = new ArrayList<>(recipients.size());
         for (String r : recipients) {
             if (rejectedRecipients.contains(r)) {

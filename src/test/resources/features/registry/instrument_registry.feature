@@ -17,6 +17,18 @@ Feature: Block 1 — Instrument Registry domain operations
     And a UNIQUE_LOCK exists for ticker "AAPL" on exchange "NASDAQ"
     And a CONFIG default has been provisioned for the new instrument
 
+  Scenario: Register on the Swiss and Spanish exchanges
+    # SWX and BME are in the production supported set (application.yml) but
+    # absent from the default background — register on both to guard the
+    # exchanges this project actually tracks (e.g. CFR.SW, SAN.MC).
+    Given the supported exchanges are "NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME"
+    When I register ticker "CFR" on exchange "SWX"
+    Then the registration succeeds
+    And the result has ticker "CFR", exchange "SWX", and status "active"
+    When I register ticker "SAN" on exchange "BME"
+    Then the registration succeeds
+    And the result has ticker "SAN", exchange "BME", and status "active"
+
   Scenario: Reject duplicate (ticker, exchange) pair
     Given an instrument "AAPL" on "NASDAQ" already exists
     When I register ticker "AAPL" on exchange "NASDAQ"
