@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="h-tchen_logo.png" alt="H-tchen Mail logo" width="200">
+</p>
+
 # Heikin Ashi Monitoring Service
 
 **A daily watchlist sentinel for retail investors.** You hand it a handful of
