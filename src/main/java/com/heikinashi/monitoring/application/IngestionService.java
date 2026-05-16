@@ -16,6 +16,7 @@ import com.heikinashi.monitoring.domain.Timeframes;
 import com.heikinashi.monitoring.domain.error.CircuitOpenException;
 import com.heikinashi.monitoring.domain.error.InstrumentNotFoundException;
 import com.heikinashi.monitoring.domain.error.OHLCInvariantViolationException;
+import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Instant;
@@ -48,18 +49,21 @@ public class IngestionService {
     private final MarketDataProvider provider;
     private final Clock clock;
     private final IngestionConfig config;
+    private final Sleeper sleeper;
 
     public IngestionService(
             InstrumentRepository instruments,
             OhlcRepository ohlc,
             MarketDataProvider provider,
             Clock clock,
-            IngestionConfig config) {
+            IngestionConfig config,
+            Sleeper sleeper) {
         this.instruments = instruments;
         this.ohlc = ohlc;
         this.provider = provider;
         this.clock = clock;
         this.config = config;
+        this.sleeper = sleeper;
     }
 
     public IngestionSummary ingestAllActive() {
@@ -129,7 +133,7 @@ public class IngestionService {
                 .orElseGet(() ->
                         clock.instant().minusSeconds((long) config.bootstrapSize(tf) * Timeframes.periodSeconds(tf)));
 
-        List<OHLCBar> raw = provider.fetchHistory(symbol, tf, since);
+        List<OHLCBar> raw = fetchWithRetry(symbol, tf, since);
         Instant now = clock.instant();
         List<OHLCBar> bars = new ArrayList<>();
         for (OHLCBar b : raw) {
@@ -164,6 +168,32 @@ public class IngestionService {
             }
         }
         return inserted;
+    }
+
+    /**
+     * Fetch history, retrying transient provider failures with exponential
+     * backoff (CLAUDE.md §6 "Transient failure with retry"). Only
+     * {@link ProviderUnavailableException} is retried — {@code TickerNotFound}
+     * and {@code SchemaDrift} are not transient and propagate immediately. The
+     * initial attempt plus {@code maxRetries} retries are made; backoff before
+     * retry n is {@code retryBaseDelayMillis × 2^(n-1)} (e.g. 1s, 2s, 4s). On
+     * exhaustion the last failure is re-thrown.
+     */
+    private List<OHLCBar> fetchWithRetry(String symbol, Timeframe tf, Instant since) {
+        ProviderUnavailableException last = null;
+        for (int attempt = 0; attempt <= config.maxRetries(); attempt++) {
+            if (attempt > 0) {
+                long delay = config.retryBaseDelayMillis() << (attempt - 1);
+                LOG.warn("ingest_retry symbol={} attempt={} delay_ms={}", symbol, attempt, delay);
+                sleeper.sleepMillis(delay);
+            }
+            try {
+                return provider.fetchHistory(symbol, tf, since);
+            } catch (ProviderUnavailableException e) {
+                last = e;
+            }
+        }
+        throw last;
     }
 
     private List<Instrument> allActive() {

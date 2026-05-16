@@ -9,7 +9,9 @@ public record IngestionConfig(
         int circuitBreakerThreshold,
         double failureRateAlertThreshold,
         Map<Timeframe, Integer> bootstrapSizes,
-        Map<String, String> exchangeSuffixMap) {
+        Map<String, String> exchangeSuffixMap,
+        int maxRetries,
+        long retryBaseDelayMillis) {
 
     public IngestionConfig {
         Objects.requireNonNull(bootstrapSizes, "bootstrapSizes");
