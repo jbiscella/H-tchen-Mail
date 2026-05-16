@@ -20,7 +20,10 @@ create a circular dependency on the very bucket it provisions.
 | `aws_dynamodb_table.tflock` | Terraform state lock. PAY_PER_REQUEST, single string `LockID` key. |
 | `aws_iam_openid_connect_provider.github` | GitHub Actions OIDC provider — lets the workflow assume an IAM role without static keys. |
 | `aws_iam_role.deploy` | Role assumed by GitHub Actions for plan / apply / deploy. Trust pinned to `${var.github_repository}` on `${var.deploy_branch}` and pull-request runs. |
-| `aws_iam_role_policy.deploy` | Inline policy giving the deploy role what it needs: TF state R/W, artifacts upload, full CRUD on the project's DynamoDB / Lambda / EventBridge / SNS / SSM / Logs / IAM-on-self / CloudWatch alarms. |
+| `aws_iam_role_policy.deploy` | Inline policy giving the deploy role what it needs: TF state R/W, artifacts upload, full CRUD on the project's DynamoDB / Lambda / EventBridge / SNS / SSM / Logs / IAM-on-self / CloudWatch alarms, plus Bedrock read + invoke for the `aws-preflight` model-access smoke check. |
+
+> Changing this policy (e.g. new Bedrock actions) means the bootstrap stack
+> must be **re-applied manually** — it is not part of the CI deploy.
 
 ## Apply
 
