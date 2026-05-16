@@ -97,9 +97,9 @@ public class InstrumentConfigService {
                     case COLOR_CHANGE -> patterns.withColorChange(buildColorChange(params, patterns.colorChange()));
                     case STRONG_CANDLE -> patterns.withStrongCandle(buildStrongCandle(params, patterns.strongCandle()));
                     case DOJI -> patterns.withDoji(buildDoji(params, patterns.doji()));
-                    // FORCED is synthetic — fromWire already rejects "forced",
-                    // so this branch is unreachable. Defensive guard for the
-                    // exhaustive switch.
+                    // FORCED is synthetic — manufactured only by the force_email
+                    // orchestration path, never configurable. This is the
+                    // active guard that rejects a user trying to configure it.
                     case FORCED -> throw new InvalidPatternConfigException(patternName);
                 };
         InstrumentConfig updated = current.withPatterns(newPatterns, clock.instant());
