@@ -197,6 +197,7 @@ Feature: Block 3 — Quote ingestion via the market-data port
     And the provider raises a "provider_unavailable" error for symbol "C"
     When I run ingest_all_active
     Then the ingestion summary has processed=4, succeeded=1, failed=3
+    And the logs contain a "HIGH_INGEST_FAILURE_RATE" line with "processed=4 failed=3"
 
   Scenario: Circuit breaker stops re-trying after threshold consecutive failures
     Given the following instruments exist:
