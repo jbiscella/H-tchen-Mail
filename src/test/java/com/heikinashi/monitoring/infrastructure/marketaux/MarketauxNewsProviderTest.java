@@ -30,6 +30,19 @@ class MarketauxNewsProviderTest {
         assertThat(first.source()).isEqualTo("reuters.com");
         assertThat(first.url()).isEqualTo("https://example.com/news/richemont-record-sales");
         assertThat(first.publishedAt()).isEqualTo(Instant.parse("2026-05-14T06:30:00Z"));
+        assertThat(first.summary()).isEqualTo("The Swiss luxury group reported sales above analyst expectations.");
+    }
+
+    @Test
+    void summary_falls_back_to_snippet_then_empty() {
+        String body = "{\"data\":["
+                + "{\"title\":\"has snippet\",\"published_at\":\"2026-05-14T06:30:00Z\",\"source\":\"s\","
+                + "\"url\":\"https://x.com/a\",\"snippet\":\"snippet text\"},"
+                + "{\"title\":\"has neither\",\"published_at\":\"2026-05-14T06:30:00Z\",\"source\":\"s\","
+                + "\"url\":\"https://x.com/b\"}]}";
+        List<NewsHeadline> news = MarketauxNewsProvider.parseNews(body, 10);
+        assertThat(news.get(0).summary()).isEqualTo("snippet text");
+        assertThat(news.get(1).summary()).isEmpty();
     }
 
     @Test
