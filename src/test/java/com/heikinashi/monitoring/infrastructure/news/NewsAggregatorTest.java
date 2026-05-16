@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 class NewsAggregatorTest {
 
     private static NewsHeadline headline(String title, String isoTime, String url) {
-        return new NewsHeadline(title, Instant.parse(isoTime), "src", url);
+        return new NewsHeadline(title, Instant.parse(isoTime), "src", url, "");
     }
 
     /** A NewsProvider stub that returns a fixed list, or throws if {@code boom} is set. */
