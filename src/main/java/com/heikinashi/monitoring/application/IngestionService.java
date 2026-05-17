@@ -73,7 +73,10 @@ public class IngestionService {
 
         for (Instrument inst : allActive()) {
             summary = summary.plusProcessed();
-            String tickerKey = inst.exchange() + "#" + inst.ticker();
+            // Keyed by ticker alone (CLAUDE.md §6 "same ticker"): an instrument
+            // is unique by (ticker, exchange), so an exchange-qualified key
+            // would be seen at most once per run and could never trip.
+            String tickerKey = inst.ticker();
             int prior = consecutiveFailures.getOrDefault(tickerKey, 0);
             if (prior >= config.circuitBreakerThreshold()) {
                 LOG.warn("circuit_open ticker={} run_skip=true", inst.ticker());
