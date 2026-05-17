@@ -211,6 +211,9 @@ Feature: Block 3 — Quote ingestion via the market-data port
     And the provider raises a "provider_unavailable" error for symbol "A.LSE"
     When I run ingest_all_active
     Then the ingestion summary has processed=4, succeeded=0, failed=4
+    # After 3 consecutive failures of ticker "A" the 4th is short-circuited
+    # rather than re-attempted against the provider.
+    And the logs contain a "circuit_open" line with "ticker=A"
 
   Scenario: Ingestion summary is returned
     Given the following instruments exist:
