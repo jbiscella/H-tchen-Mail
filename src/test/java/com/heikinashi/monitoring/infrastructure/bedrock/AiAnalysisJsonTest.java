@@ -44,6 +44,31 @@ class AiAnalysisJsonTest {
     }
 
     @Test
+    void flattens_a_structured_field_into_prose_instead_of_java_tostring() {
+        // A model that ignores the "plain prose" instruction and answers with an
+        // array of objects must not leak "[{headline=...}]" into the email.
+        String raw = """
+                {
+                  "corroborating": [
+                    {"headline": "Earnings beat", "why": "supports the bullish reversal"},
+                    {"headline": "Upbeat guidance", "why": "confirms momentum"}
+                  ],
+                  "contradicting": "Sector beta is high.",
+                  "confidence": "MEDIUM",
+                  "data_sources": []
+                }
+                """;
+        AiAnalysis a = AiAnalysisJson.parse(raw);
+        assertThat(a.corroborating()).isPresent();
+        assertThat(a.corroborating().get())
+                .doesNotContain("[{")
+                .doesNotContain("headline=")
+                .contains("Earnings beat")
+                .contains("supports the bullish reversal")
+                .contains("Upbeat guidance");
+    }
+
+    @Test
     void empty_input_raises_LLMException() {
         assertThatThrownBy(() -> AiAnalysisJson.parse("")).isInstanceOf(LLMException.class);
         assertThatThrownBy(() -> AiAnalysisJson.parse("   ")).isInstanceOf(LLMException.class);
