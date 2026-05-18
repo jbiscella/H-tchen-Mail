@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Parses the AI analyst's final JSON output into an {@link AiAnalysis}
@@ -88,7 +89,33 @@ final class AiAnalysisJson {
         if (v == null) {
             return Optional.empty();
         }
-        String s = v.toString().trim();
+        String s = flatten(v).trim();
         return s.isEmpty() ? Optional.empty() : Optional.of(s);
+    }
+
+    /**
+     * Render a field value as prose. The prompt requires a plain string, but a
+     * model may still answer with an array or object; flattening collects the
+     * textual content into readable text rather than leaking Java's
+     * {@code List}/{@code Map} {@code toString()} (e.g. {@code [{headline=...}]})
+     * verbatim into the alert email.
+     */
+    private static String flatten(Object v) {
+        if (v instanceof String s) {
+            return s;
+        }
+        if (v instanceof Map<?, ?> m) {
+            return m.values().stream()
+                    .map(AiAnalysisJson::flatten)
+                    .filter(s -> !s.isBlank())
+                    .collect(Collectors.joining(" — "));
+        }
+        if (v instanceof List<?> list) {
+            return list.stream()
+                    .map(AiAnalysisJson::flatten)
+                    .filter(s -> !s.isBlank())
+                    .collect(Collectors.joining("\n\n"));
+        }
+        return String.valueOf(v);
     }
 }

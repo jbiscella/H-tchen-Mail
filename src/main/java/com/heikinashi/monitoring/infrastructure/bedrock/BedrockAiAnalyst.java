@@ -54,17 +54,23 @@ public class BedrockAiAnalyst implements AiAnalyst {
             {"corroborating": "...", "contradicting": "...", "confidence": "LOW|MEDIUM|HIGH", \
             "data_sources": ["news_headlines(5)", "recommendations(0)", ...]}
 
-            CORROBORATING — cite up to 5 news items that justify the detected pattern. Rank \
-            the candidates by, in priority order:
+            FORMAT — "corroborating" and "contradicting" must each be a single string of \
+            plain prose: flowing sentences an analyst would write. They must NOT be JSON, \
+            arrays, objects, key=value pairs, or bullet/numbered lists. Mention the items \
+            inline, in the prose. Only "confidence" is an enum and "data_sources" an array \
+            of strings.
+
+            CORROBORATING — discuss up to 5 news items that justify the detected pattern, \
+            in flowing prose. Rank which items to feature by, in priority order:
               1. Recency — items published within 7 days of the pattern bar_time come first.
               2. Direction alignment — items whose content or sentiment matches the pattern \
             direction (bullish_* subtypes are bullish, bearish_* subtypes are bearish).
               3. Specificity — items naming the company directly outrank sector-wide news.
               4. Material impact — earnings, M&A, guidance and regulatory news outrank \
             analyst opinion, which outranks generic sector news.
-            Give each cited item a short phrase saying why it supports the signal. Cite \
-            fewer than 5 if fewer pass the filters; if none are relevant, say so explicitly \
-            rather than padding the note with noise.
+            Name each item you feature and say in a sentence why it supports the signal. \
+            Discuss fewer than 5 if fewer pass the filters; if none are relevant, say so \
+            explicitly rather than padding the note with noise.
 
             CONTRADICTING — note fundamentals that weaken or fail to support the signal. \
             When a useful data source returned nothing, do not just write "data not \
@@ -75,6 +81,11 @@ public class BedrockAiAnalyst implements AiAnalyst {
             DATA_SOURCES — list every tool you called, formatted as "name(count)" where \
             count is how many items it returned, e.g. "news_headlines(5)", \
             "recommendations(0)". This makes source coverage transparent to the reader.
+
+            CONFIDENCE — your own judgment of how strongly the evidence you actually \
+            gathered supports the pattern. Weigh how material and relevant the news is, \
+            not how much of it there is: sparse but highly material evidence can still be \
+            HIGH, abundant but weak evidence can be LOW. You decide.
 
             Be honest about limited information; never invent facts. There is no strict \
             length limit — prioritise information density over brevity. Output the JSON \
