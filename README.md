@@ -184,6 +184,39 @@ implemented — for now:
   persisted HA + OHLC bar. Skips silently when no HA bar exists yet
   (first ingest). Combine with `instrument_ids` to scope it.
 
+## Disclaimer
+
+This software is a tool for **historical analysis only**.
+It is NOT a trading platform, brokerage, financial advice service,
+or investment product.
+
+**No warranties.** The software is provided "AS IS" under its license.
+The author makes no warranties regarding accuracy, completeness,
+reliability, or fitness for any purpose.
+
+**Past performance is not indicative of future results.** Results
+obtained with this software reflect hypothetical performance on
+historical data and have inherent limitations:
+- They cannot account for all market conditions
+- They cannot model unforeseen events
+- They cannot guarantee future returns
+
+**Use at your own risk.** Any trading decisions based on output
+from this software are made solely at the user's discretion and
+risk. The author accepts no liability for any financial losses,
+regulatory issues, or other consequences arising from use of this
+software.
+
+**No financial advice.** Nothing in this software, its documentation,
+its output, or its associated artifacts constitutes financial,
+investment, legal, or tax advice. Users should consult qualified
+professionals before making investment decisions.
+
+**No regulatory endorsement.** This software is not registered with,
+endorsed by, or approved by any financial regulatory authority.
+Users are solely responsible for compliance with applicable laws
+and regulations in their jurisdiction.
+
 ## License
 
 Released under the [BSD Zero Clause License](LICENSE).
