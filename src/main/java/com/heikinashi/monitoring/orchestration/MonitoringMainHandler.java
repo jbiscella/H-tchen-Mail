@@ -3,11 +3,14 @@ package com.heikinashi.monitoring.orchestration;
 import com.heikinashi.monitoring.application.MonitoringRunService;
 import com.heikinashi.monitoring.domain.MainInput;
 import com.heikinashi.monitoring.domain.MainSummary;
+import com.heikinashi.monitoring.infrastructure.BuildInfo;
 import io.micronaut.function.aws.MicronautRequestHandler;
 import jakarta.inject.Inject;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * AWS Lambda entry point for {@code monitoring-main} (CLAUDE.md §10).
@@ -20,11 +23,17 @@ import java.util.Optional;
  */
 public class MonitoringMainHandler extends MicronautRequestHandler<Map<String, Object>, Map<String, Object>> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(MonitoringMainHandler.class);
+
     @Inject
     MonitoringRunService runService;
 
+    @Inject
+    BuildInfo buildInfo;
+
     @Override
     public Map<String, Object> execute(Map<String, Object> input) {
+        LOG.info("build_info run=main build={}", buildInfo.label());
         MainInput mainInput = MainInputParser.parse(input);
         MainSummary summary = runService.execute(mainInput);
         return summaryToMap(summary);
