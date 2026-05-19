@@ -90,7 +90,8 @@ class EmailBodiesTest {
                     .contains("automated alert from historical pattern detection")
                     .contains("not financial advice")
                     .contains("past performance not indicative")
-                    .contains("provided AS IS under open-source license");
+                    .contains("provided AS IS under open-source license")
+                    .contains("no warranties");
             // Style: no shouty bold or caps — it must read as part of the
             // technical footer, not as a separate warning block.
             assertThat(html)

@@ -98,7 +98,8 @@ final class EmailBodies {
             + FAINT
             + ";\">disclaimer &middot; automated alert from historical pattern detection"
             + " &middot; not financial advice &middot; past performance not indicative"
-            + " &middot; provided AS IS under open-source license &middot; use at own risk</div>";
+            + " &middot; provided AS IS under open-source license &middot; use at own risk"
+            + " &middot; no warranties</div>";
 
     static String html(
             PatternEvent event, Optional<String> chartCid, Optional<AiAnalysis> analysis, AlertEnrichment enrichment) {
