@@ -2,10 +2,13 @@ package com.heikinashi.monitoring.orchestration;
 
 import com.heikinashi.monitoring.application.RetryPollerService;
 import com.heikinashi.monitoring.domain.PollResult;
+import com.heikinashi.monitoring.infrastructure.BuildInfo;
 import io.micronaut.function.aws.MicronautRequestHandler;
 import jakarta.inject.Inject;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * AWS Lambda entry point for {@code retry-poller} (CLAUDE.md §10).
@@ -17,11 +20,17 @@ import java.util.Map;
  */
 public class RetryPollerHandler extends MicronautRequestHandler<Map<String, Object>, Map<String, Object>> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(RetryPollerHandler.class);
+
     @Inject
     RetryPollerService pollerService;
 
+    @Inject
+    BuildInfo buildInfo;
+
     @Override
     public Map<String, Object> execute(Map<String, Object> input) {
+        LOG.info("build_info run=retry-poller build={}", buildInfo.label());
         PollResult result = pollerService.processBatch();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("processed", result.processed());
