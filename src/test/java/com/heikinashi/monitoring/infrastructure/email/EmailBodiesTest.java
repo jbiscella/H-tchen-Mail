@@ -80,6 +80,19 @@ class EmailBodiesTest {
     }
 
     @Test
+    void html_body_carries_the_legal_disclaimer_footer() {
+        String full = EmailBodies.html(EVENT, Optional.of("img-1"), Optional.of(ANALYSIS), AlertEnrichment.FULL);
+        String degraded = EmailBodies.html(EVENT, Optional.empty(), Optional.empty(), AlertEnrichment.DEGRADED_BOTH);
+        for (String html : new String[] {full, degraded}) {
+            assertThat(html)
+                    .contains("<strong>Disclaimer:</strong>")
+                    .contains("NOT financial advice")
+                    .contains("Past performance is not indicative of future results")
+                    .contains("provided \"AS IS\"");
+        }
+    }
+
+    @Test
     void html_body_without_chart_emits_unavailable_placeholder() {
         String html = EmailBodies.html(EVENT, Optional.empty(), Optional.empty(), AlertEnrichment.DEGRADED_BOTH);
         assertThat(html).doesNotContain("<img");
