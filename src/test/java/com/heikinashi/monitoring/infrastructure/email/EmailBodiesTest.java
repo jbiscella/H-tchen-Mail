@@ -80,15 +80,23 @@ class EmailBodiesTest {
     }
 
     @Test
-    void html_body_carries_the_legal_disclaimer_footer() {
+    void html_body_carries_the_legal_disclaimer_footer_in_quiet_terminal_style() {
         String full = EmailBodies.html(EVENT, Optional.of("img-1"), Optional.of(ANALYSIS), AlertEnrichment.FULL);
         String degraded = EmailBodies.html(EVENT, Optional.empty(), Optional.empty(), AlertEnrichment.DEGRADED_BOTH);
         for (String html : new String[] {full, degraded}) {
+            // Substance: the four legal clauses must still be present.
             assertThat(html)
-                    .contains("<strong>Disclaimer:</strong>")
-                    .contains("NOT financial advice")
-                    .contains("Past performance is not indicative of future results")
-                    .contains("provided \"AS IS\"");
+                    .contains("disclaimer &middot;")
+                    .contains("automated alert from historical pattern detection")
+                    .contains("not financial advice")
+                    .contains("past performance not indicative")
+                    .contains("provided AS IS under open-source license");
+            // Style: no shouty bold or caps — it must read as part of the
+            // technical footer, not as a separate warning block.
+            assertThat(html)
+                    .doesNotContain("<strong>Disclaimer:")
+                    .doesNotContain("NOT financial advice")
+                    .doesNotContain("<footer");
         }
     }
 
