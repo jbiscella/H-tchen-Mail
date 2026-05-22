@@ -77,7 +77,8 @@ without waiting for a real pattern (see [`DEPLOY.md`](DEPLOY.md)).
 | [`terraform/bootstrap/README.md`](terraform/bootstrap/README.md) | Bootstrap stack reference: state bucket, lock table, GitHub OIDC provider, deploy IAM role + trust policy. Applied once per account, manually. |
 | [`terraform/main/README.md`](terraform/main/README.md) | Main stack reference: per-file resource catalog, the code-vs-shape deploy model and `lifecycle { ignore_changes }` rationale, manual prerequisites, ops notes. |
 | [`THIRD_PARTY_LICENSES.txt`](THIRD_PARTY_LICENSES.txt) | Auto-generated full enumeration of every direct + transitive Maven dependency with licenses. Refreshed on every `mvn verify`. |
-| [`LICENSE`](LICENSE) | BSD-0 project license + third-party license families summary. |
+| [`NOTICE`](NOTICE) | Third-party license families summary + the JFreeChart LGPL note. |
+| [`LICENSE`](LICENSE) | BSD-0 project license (canonical text only, so GitHub detects it). |
 | [`context-diary/`](context-diary/) | Periodic handoff snapshots intended for fresh agent/session pickup. |
 
 ## Stack
@@ -104,7 +105,8 @@ without waiting for a real pattern (see [`DEPLOY.md`](DEPLOY.md)).
 ├── CLAUDE.md                       # authoritative specification
 ├── DEPLOY.md                       # step-by-step deploy runbook
 ├── README.md                       # you are here
-├── LICENSE                         # BSD-0 + third-party summary
+├── LICENSE                         # BSD-0 (canonical text only)
+├── NOTICE                          # third-party license families summary
 ├── THIRD_PARTY_LICENSES.txt        # full dep enumeration (auto-generated)
 ├── pom.xml                         # Maven build
 ├── src/
