@@ -4,6 +4,16 @@
 
 # Heikin Ashi Monitoring Service
 
+<p align="center">
+  <img alt="Java 25" src="https://img.shields.io/badge/Java-25-ED8B00?style=flat-square&logo=openjdk&logoColor=white">
+  <img alt="Micronaut 4.10" src="https://img.shields.io/badge/Micronaut-4.10-0094EC?style=flat-square&logo=micronaut&logoColor=white">
+  <img alt="AWS Lambda" src="https://img.shields.io/badge/AWS%20Lambda-serverless-FF9900?style=flat-square&logo=awslambda&logoColor=white">
+  <img alt="Build: Maven" src="https://img.shields.io/badge/build-Maven-C71A36?style=flat-square&logo=apachemaven&logoColor=white">
+  <a href="https://github.com/jbiscella/H-tchen-Mail/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jbiscella/H-tchen-Mail/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI"></a>
+  <a href="LICENSE"><img alt="License: 0BSD" src="https://img.shields.io/badge/license-0BSD-3DA639?style=flat-square"></a>
+  <img alt="Version 0.42.0-alpha" src="https://img.shields.io/badge/version-0.42.0--alpha-FF8800?style=flat-square">
+</p>
+
 **A daily watchlist sentinel for retail investors.** You hand it a handful of
 stocks; it watches them for you and emails you only when one does something
 worth a second look — so you don't have to sit staring at charts.
