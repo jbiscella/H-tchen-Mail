@@ -36,7 +36,6 @@
         <exec.mainClass>com.heikinashi.monitoring.orchestration.MonitoringMainHandler</exec.mainClass>
 
         <aws.sdk.version>2.30.0</aws.sdk.version>
-        <jfreechart.version>1.5.5</jfreechart.version>
 
         <!--
             ha-track: shared Heikin Ashi kernel + libraries, published to Maven
@@ -196,13 +195,11 @@
             <artifactId>heerwisch-jfreechart</artifactId>
             <version>${hatrack.version}</version>
         </dependency>
-
-        <!-- Charting (legacy renderer; superseded by heerwisch in Block 14) -->
-        <dependency>
-            <groupId>org.jfree</groupId>
-            <artifactId>jfreechart</artifactId>
-            <version>${jfreechart.version}</version>
-        </dependency>
+        <!--
+            Charting is now heerwisch (Block 14). JFreeChart is no longer used
+            directly by H-tchen — heerwisch-jfreechart pulls it transitively
+            (compile scope) as its rendering driver.
+        -->
 
         <!-- Email composition -->
         <dependency>
