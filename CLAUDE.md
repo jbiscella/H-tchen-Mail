@@ -2062,6 +2062,311 @@ Never call `Instant.now()`, `UUID.randomUUID()`, `new Random()` directly inside 
 
 ---
 
+## Block 11 — ha-track dependency adoption
+
+**Supersedes:** nothing. Foundational; prerequisite of Block 12–16.
+
+**Goal**: Add the ha-track libraries as Maven dependencies at the same `${hatrack.version}` already used by wichtelm-app, and introduce a single adapter between H-tchen's domain bar types and ha-track's `commons` bar types — the one boundary every later block depends on.
+
+**Naming caution (homonyms across packages).** ha-track and H-tchen share type names. Throughout Block 11–16:
+- `org.hatrack.commons.*` = library types (target)
+- `com.heikinashi.monitoring.domain.*` = current custom types (to be deprecated)
+
+"the commons `HABar`" always means `org.hatrack.commons.HABar`, never the domain one.
+
+**Prerequisites**
+- Confirm by reading `org.hatrack.commons` (`OHLCBar`, `HABar`, `OHLCSeries`, `HASeries`): field names, BigDecimal scale, timestamp type, how `HASeries` is constructed.
+
+```gherkin
+Feature: Bar type adapter between domain and commons
+
+  Scenario: Domain HABar list converts to a commons HASeries
+    Given a list of com.heikinashi.monitoring.domain.HABar
+    When converted
+    Then an org.hatrack.commons.HASeries is produced
+    And open/high/low/close are equal by BigDecimal compareTo
+    And timestamp ordering is preserved
+
+  Scenario: Scale mismatch is explicit, never silently rounded
+    Given a domain bar whose BigDecimal scale differs from commons' expectation
+    When converted
+    Then scale handling is explicit
+    And any precision change is asserted in a test, not implicit
+```
+
+**Operational invariants**
+- The adapter is the ONLY place importing both `com.heikinashi.monitoring.domain` bar types and `org.hatrack.commons` bar types.
+
+**Out of scope**
+- Deleting domain bar types (kept until later blocks decide their fate).
+- Any detection/HA/chart/ingest change (their own blocks).
+
+---
+
+## Block 12 — Heikin Ashi computation via commons
+
+**Supersedes:** Block 4 (Heikin Ashi Computation).
+
+**Goal**: Compute HA bars via `org.hatrack.commons.HeikinAshiCalculator` instead of the custom `com.heikinashi.monitoring.domain.HeikinAshiCalculator`, so HA formulas have one canonical implementation shared with wichtelm-app.
+
+**Prerequisites**
+- Block 11 adapter in place.
+- Confirm the commons calculator's first-bar seeding matches the "Heikin Ashi formulas (canonical reference)" already documented in this CLAUDE.md (Data Model section).
+
+```gherkin
+Feature: HA computation delegates to commons
+
+  Scenario: Commons calculator reproduces the canonical first-bar seed
+    Given an OHLC chain whose first HA bar is defined by the CLAUDE.md reference
+    When HA bars are computed via commons
+    Then the first HA bar matches the reference by BigDecimal compareTo
+
+  Scenario: Idempotent recompute
+    Given HA bars already persisted for an instrument/timeframe
+    When computation runs again on the same OHLC chain
+    Then recomputed HA bars are identical and persistence is a no-op
+
+  Scenario: Newly computed bars are reported downstream
+    When computation completes
+    Then the list of newly computed HA bars is returned for detection
+```
+
+**Operational invariants**
+- The persisted HA attribute schema in DynamoDB is unchanged — this block changes the calculator, not the storage model.
+- First-bar seeding must be equivalent to the current implementation, or the divergence must fail loud (see cascade note), not auto-reconcile.
+
+**Out of scope**
+- Changing the DynamoDB HA item layout.
+
+**Cascade warning**: if the commons seed differs from H-tchen's, every persisted HA bar recomputes differently and alert history shifts. A parity test MUST fail loudly on divergence before merge.
+
+---
+
+## Block 13 — Quote ingestion via frau-holle-eodhd
+
+**Supersedes:** Block 3 (Quote Ingestion via EODHD).
+
+**Goal**: Fetch OHLC via `frau-holle-eodhd` behind the existing `MarketDataProvider` port, replacing the custom `EodhdMarketDataProvider`, so the EODHD integration is shared and maintained in one place.
+
+**Prerequisites**
+- Confirm frau-holle-eodhd's fetch API, API-key/config injection, timeframe vocabulary (daily/weekly), and its closed-bar guarantee — by reading the module.
+- Confirm its returned bars convert via the Block 11 adapter (or a sibling OHLC adapter).
+
+```gherkin
+Feature: Ingestion uses frau-holle-eodhd
+
+  Scenario: Ingestion still depends only on the MarketDataProvider port
+    Then no orchestration code imports frau-holle-eodhd directly
+    And the new provider is the only implementation behind the port
+
+  Scenario: Only closed bars are ingested
+    Given today's bar is not yet closed
+    When ingestion runs
+    Then the open bar is excluded
+
+  Scenario: Idempotent persistence and storage policy preserved
+    When the same closed bars are ingested twice
+    Then DynamoDB writes are idempotent
+    And the per-instrument storage policy and TTL are applied as before
+```
+
+**Operational invariants**
+- The `MarketDataProvider` port signature stays stable; only its implementation swaps.
+- EODHD API-key handling must match the current secret-injection mechanism — confirm against the existing `EodhdConfig`, do not assume env-var vs SSM.
+
+**Out of scope**
+- Adding frau-holle-csv (not used; flag if offline testing is wanted later).
+
+---
+
+## Block 14 — Chart rendering via heerwisch
+
+**Supersedes:** the chart-rendering half of Block 6 (Rich Alert Dispatch). The AI note (Bedrock), SES send, and retry queue in Block 6 are untouched.
+
+**Goal**: Render the HA alert chart via heerwisch's `ChartRenderer`/`ChartSpec` instead of the custom `JFreeChartRenderer`, so chart output is shared with wichtelm-app.
+
+**Prerequisites**
+- Confirm heerwisch-api `ChartSpec` / `ChartRenderer` and the heerwisch-jfreechart driver output vs H-tchen's `ChartImage` — by reading the modules.
+- Confirm the email composer can consume what heerwisch produces.
+
+```gherkin
+Feature: Chart rendering via heerwisch
+
+  Scenario: An alert chart renders from a ChartSpec
+    Given an alert and its HA series window
+    When the chart is rendered
+    Then heerwisch produces an image consumable by the existing email composer
+    And the triggering candle is highlighted
+
+  Scenario: Headless rendering unchanged
+    When rendering runs in the Lambda environment
+    Then no display or server is required
+```
+
+**Operational invariants**
+- The email MIME structure (multipart text+HTML, inline image CID) stays intact — only the image producer changes.
+
+**Out of scope**
+- The AI note, SES send, retry/fallback queue (remain custom, untouched).
+
+---
+
+## Block 15 — Detection via nachtkrapp; strategies replace fixed patterns
+
+**Supersedes:** Block 5 (Heikin Ashi Pattern Detection) — both the detection engine and the three-fixed-pattern model.
+
+**Goal**: Replace the custom `PatternDetector` with nachtkrapp's `org.hatrack.nachtkrapp.detector.PatternDetector`, and move from three hard-coded patterns to per-instrument strategies whose conditions are nachtkrapp `DetectionRule`s. A strategy supersedes the fixed patterns for an instrument: an instrument monitored by a strategy no longer emits the three legacy alerts. Anyone wanting the old behaviour expresses it as a minimal one-condition strategy.
+
+**Prerequisites**
+- Block 11 adapter in place.
+- Strategies are supplied to H-tchen as an imported JSON file in an H-tchen-owned format (Block 16 defines monitoring semantics; the JSON schema itself is an H-tchen artifact). The JSON is translated, inside H-tchen, into `DetectionRule`s. nachtkrapp does NOT serialize `DetectionRule` (JDK-only records, by design) — the translation is H-tchen code, in one place.
+
+```gherkin
+Feature: Detection delegates to nachtkrapp, driven by strategies
+
+  Background:
+    Given an instrument configured with an imported strategy
+    And the strategy's market conditions translated into DetectionRules
+
+  Scenario: A strategy condition maps to a nachtkrapp rule and is evaluated
+    When detection runs
+    Then a DetectionSpec is built via DetectionSpecBuilder
+      # withSeries, withTimeframe, addRule
+    And org.hatrack.nachtkrapp.detector.PatternDetector.detect is invoked
+
+  Scenario: Strategy supersedes the three fixed patterns
+    Given an instrument monitored by a strategy
+    When detection runs
+    Then no legacy color_change / strong_candle / doji alert is produced for it
+    And only the strategy's scenarios can raise alerts
+
+  Scenario: Only the latest bar can raise an alert
+    Given a long first ingest
+    When detection runs
+    Then at most the latest bar is evaluated for alerting
+
+  Scenario: Detection remains a pure function
+    When detection runs
+    Then no I/O occurs except reading historical HA bars
+
+  Scenario: A condition with no DetectionRule equivalent fails loud at import
+    Given an imported strategy JSON naming a condition with no nachtkrapp DetectionRule
+    When the strategy is imported
+    Then import fails loud, naming the unsupported condition
+    And no partial monitoring of that strategy is established
+```
+
+**Operational invariants**
+- The translation JSON -> `DetectionRule` is the single point that rejects unsupported conditions (fail loud, never partial).
+- Determinism: same HA series + same strategy => same alerts (BigDecimal arithmetic preserved by nachtkrapp).
+
+**Out of scope**
+- The strategy-monitoring behaviour (role labels, memo, transition, multi-match): Block 16.
+- The JSON schema field list (an H-tchen design artifact, produced during implementation).
+
+---
+
+## Block 16 — Strategy monitoring behaviour (stateless)
+
+**Supersedes:** nothing (new behaviour layered on Block 15).
+
+**Goal**: Given an imported strategy, evaluate its market-condition scenarios against the latest bar and email which scenario matched — labelled by role, with stop-loss/take-profit quoted verbatim as a memo — while position state and order placement remain the user's. H-tchen is stateless: it never tracks whether a position is open.
+
+**Conceptual model (from the .strat shape the exporter maps from).** Each scenario carries:
+- market conditions H-tchen evaluates;
+- a role label (entry/exit, long/short) — a free-text string, used for display only, never branched on;
+- an optional stop-loss and take-profit expression — verbatim text, never evaluated;
+- a position precondition (e.g. "a long position is open") — shown as context, never evaluated.
+
+```gherkin
+Feature: Monitor an imported strategy, stateless
+
+  Background:
+    Given an instrument with an imported strategy
+    And each scenario carries market conditions, a role label, and optional memo text
+
+  Scenario: A market-condition scenario matches on the latest bar
+    Given a scenario whose conditions are all market conditions
+    When every condition is true on the latest bar
+    And the scenario was not already true on the previous bar
+    Then one alert line is produced
+    And it shows the scenario's role label verbatim
+    And it includes the scenario name for traceability
+
+  Scenario: An exit-signal scenario is a first-class alert
+    Given a scenario whose role is an exit and whose conditions are market conditions
+    When those conditions are true on the latest bar
+    Then an alert labelled as that exit role is produced
+    And it is treated exactly like an entry alert, not demoted to memo
+
+  Scenario: Stop-loss and take-profit are quoted, never evaluated
+    Given a matched entry scenario with stop-loss and take-profit text
+    Then the alert quotes both verbatim, as written in the source (e.g. entry * 0.98)
+    And no absolute price is computed from them
+    And the memo states these are for the user to configure at their broker
+
+  Scenario: Position precondition is context, not evaluated
+    Given a matched exit scenario whose precondition is "a long position is open"
+    Then H-tchen does not check whether a position is open
+    And the alert notes the scenario applies only if the user is long
+
+  Scenario: Per-scenario transition gating
+    Given a scenario stays true across consecutive bars
+    When evaluation runs each day
+    Then an alert fires only on the bar where that scenario first became true
+    And each scenario's true/false memory is tracked independently
+
+  Scenario: Multiple scenarios match on the same bar
+    Given two scenarios of one strategy match on the same latest bar
+    Then a single email is sent with one line per matched scenario
+
+  Scenario: Insufficient history for a cross-based condition
+    Given a condition needing the previous bar
+    And fewer bars than required are available
+    When evaluation runs
+    Then nachtkrapp's InsufficientDataException is handled
+    And no alert is produced for that scenario
+```
+
+**Operational invariants**
+- H-tchen never evaluates stop-loss, take-profit, or position preconditions — only market conditions.
+- Transition memory is per scenario, not per strategy.
+- New alert wire values introduced for strategy scenarios are additive and stable (persisted in ALERT audit items).
+
+**Out of scope**
+- Evaluating any entry_price-relative expression (always memo; broker executes).
+- Tracking position state (flat by design).
+- Stateless-parametric evaluation via a user-supplied entry price and a future mail "commit" button (deferred; not on the critical path).
+- Order execution, paper-trading, P&L.
+- Verifying the imported strategy matches the one backtested in wichtelm (no bridge between the tools — separate concern).
+
+---
+
+## Dependency order
+
+| Block | Supersedes | On H-tchen critical path | Depends on |
+|---|---|---|---|
+| 11 adapter | — | yes | — |
+| 12 HA | Block 4 | yes | 11 |
+| 13 ingest | Block 3 | yes | 11 |
+| 14 chart | Block 6 (chart half) | yes | — |
+| 15 detection | Block 5 | yes | 11 |
+| 16 strategy behaviour | — | yes | 15 |
+
+Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), then 12 → 13 → 14 (consolidation, rising risk). 12/13/14 are independent of each other after 11.
+
+## Decisions to settle during implementation (not blocking)
+
+- The JSON strategy schema field list (H-tchen artifact).
+- Memo language: technical verbatim (chosen provisionally) vs plain-language rephrase.
+
+## External dependencies (other repos — tracked, not specified here)
+
+- ha-track: NO CHANGE.
+- wichtelm-app: a `.strat` -> H-tchen JSON export utility. Must verify each `.strat` primitive maps to a nachtkrapp `DetectionRule`; gaps surface there. Optional, later.
+
+---
+
 ## 14. Configuration Appendix
 
 ### SSM Parameter Store (consolidated)
