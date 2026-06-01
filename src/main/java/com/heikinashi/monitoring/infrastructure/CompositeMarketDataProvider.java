@@ -4,7 +4,7 @@ import com.heikinashi.monitoring.domain.MarketDataProvider;
 import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
-import com.heikinashi.monitoring.infrastructure.eodhd.EodhdMarketDataProvider;
+import com.heikinashi.monitoring.infrastructure.eodhd.FrauHolleEodhdMarketDataProvider;
 import com.heikinashi.monitoring.infrastructure.news.NewsAggregator;
 import io.micronaut.context.annotation.Primary;
 import jakarta.inject.Singleton;
@@ -20,17 +20,17 @@ import java.util.List;
  * provider implements them yet.
  *
  * <p>{@code @Primary} resolves the injection ambiguity with
- * {@link EodhdMarketDataProvider}, which is also a {@code MarketDataProvider}
+ * {@link FrauHolleEodhdMarketDataProvider}, which is also a {@code MarketDataProvider}
  * bean.
  */
 @Singleton
 @Primary
 public class CompositeMarketDataProvider implements MarketDataProvider {
 
-    private final EodhdMarketDataProvider history;
+    private final FrauHolleEodhdMarketDataProvider history;
     private final NewsAggregator news;
 
-    public CompositeMarketDataProvider(EodhdMarketDataProvider history, NewsAggregator news) {
+    public CompositeMarketDataProvider(FrauHolleEodhdMarketDataProvider history, NewsAggregator news) {
         this.history = history;
         this.news = news;
     }

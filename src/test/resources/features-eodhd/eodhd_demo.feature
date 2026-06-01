@@ -2,10 +2,10 @@
 Feature: EODHD provider — demo key smoke
 
   Real network test against the public EODHD "demo" API token. Confirms the
-  production EodhdMarketDataProvider can hit the real endpoint, that URLs
-  are built correctly, and that response shape matches what the parser
-  expects. Skipped automatically when EODHD is unreachable from the test
-  runner (offline dev, network-restricted CI).
+  production FrauHolleEodhdMarketDataProvider (frau-holle-eodhd) can hit the
+  real endpoint, that URLs are built correctly, and that response shape
+  matches what the parser expects. Skipped automatically when EODHD is
+  unreachable from the test runner (offline dev, network-restricted CI).
 
   Demo-supported symbols per EODHD docs: AAPL.US, TSLA.US, MCD.US, VTI.US,
   AMZN.US — used here as the full equity exemplar set. Other demo-capable
