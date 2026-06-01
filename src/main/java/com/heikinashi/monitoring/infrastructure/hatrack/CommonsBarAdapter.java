@@ -52,12 +52,7 @@ public final class CommonsBarAdapter {
     /** Domain OHLC bar to a commons OHLC bar (prices passed through unchanged). */
     public static org.hatrack.commons.OHLCBar toCommons(OHLCBar bar) {
         return new org.hatrack.commons.OHLCBar(
-                bar.barTime(),
-                bar.open(),
-                bar.high(),
-                bar.low(),
-                bar.close(),
-                bar.volume());
+                bar.barTime(), bar.open(), bar.high(), bar.low(), bar.close(), bar.volume());
     }
 
     /** A chronological list of domain OHLC bars to a commons {@code OHLCSeries}. */
@@ -94,12 +89,7 @@ public final class CommonsBarAdapter {
 
     /** Domain HA bar to a commons HA bar (values passed through unchanged). */
     public static org.hatrack.commons.HABar toCommons(HABar bar) {
-        return new org.hatrack.commons.HABar(
-                bar.barTime(),
-                bar.haOpen(),
-                bar.haHigh(),
-                bar.haLow(),
-                bar.haClose());
+        return new org.hatrack.commons.HABar(bar.barTime(), bar.haOpen(), bar.haHigh(), bar.haLow(), bar.haClose());
     }
 
     /** A chronological list of domain HA bars to a commons {@code HASeries}. */
@@ -114,10 +104,7 @@ public final class CommonsBarAdapter {
      * denormalized metadata that commons does not model.
      */
     public static HABar fromCommons(
-            org.hatrack.commons.HABar bar,
-            String instrumentId,
-            Timeframe timeframe,
-            Instant computedAt) {
+            org.hatrack.commons.HABar bar, String instrumentId, Timeframe timeframe, Instant computedAt) {
         return new HABar(
                 instrumentId,
                 timeframe,

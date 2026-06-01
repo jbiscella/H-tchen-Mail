@@ -3,7 +3,7 @@ package com.heikinashi.monitoring.application;
 import com.heikinashi.monitoring.domain.BulkRecomputeResult;
 import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.HaRepository;
-import com.heikinashi.monitoring.domain.HeikinAshiCalculator;
+import com.heikinashi.monitoring.domain.HeikinAshiEngine;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
@@ -32,6 +32,9 @@ import org.slf4j.LoggerFactory;
  * identical OHLC produces identical HA, overwriting safely.
  *
  * <p>Bulk recompute: drop all HA bars and rebuild from the OHLC chain.
+ *
+ * <p>Block 12: the HA formulas now run through the injected
+ * {@link HeikinAshiEngine} (ha-track commons), not the local static calculator.
  */
 @Singleton
 public class HeikinAshiService {
@@ -41,12 +44,19 @@ public class HeikinAshiService {
     private final InstrumentRepository instruments;
     private final OhlcRepository ohlc;
     private final HaRepository ha;
+    private final HeikinAshiEngine engine;
     private final Clock clock;
 
-    public HeikinAshiService(InstrumentRepository instruments, OhlcRepository ohlc, HaRepository ha, Clock clock) {
+    public HeikinAshiService(
+            InstrumentRepository instruments,
+            OhlcRepository ohlc,
+            HaRepository ha,
+            HeikinAshiEngine engine,
+            Clock clock) {
         this.instruments = instruments;
         this.ohlc = ohlc;
         this.ha = ha;
+        this.engine = engine;
         this.clock = clock;
     }
 
@@ -84,7 +94,7 @@ public class HeikinAshiService {
         }
 
         Instant computedAt = clock.instant();
-        List<HABar> result = HeikinAshiCalculator.computeChain(prev, chain, computedAt);
+        List<HABar> result = engine.computeChain(prev, chain, computedAt);
 
         for (HABar bar : result) {
             Optional<Long> ttl = StoragePolicies.computeTtl(cfg, bar.barTime(), tf);
@@ -112,7 +122,7 @@ public class HeikinAshiService {
         }
 
         Instant computedAt = clock.instant();
-        List<HABar> chain = HeikinAshiCalculator.computeChain(Optional.empty(), all, computedAt);
+        List<HABar> chain = engine.computeChain(Optional.empty(), all, computedAt);
         for (HABar bar : chain) {
             Optional<Long> ttl = StoragePolicies.computeTtl(cfg, bar.barTime(), tf);
             if (cfg.storagePolicy() == StoragePolicy.SNAPSHOT_ONLY) {

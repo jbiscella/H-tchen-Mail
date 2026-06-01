@@ -31,6 +31,7 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
+import com.heikinashi.monitoring.infrastructure.hatrack.CommonsHeikinAshiEngine;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -130,7 +131,8 @@ public final class World {
                 1000L);
         // No-op sleeper: the retry path runs at full speed in tests.
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg, millis -> {});
-        heikinAshiService = new HeikinAshiService(repository, ohlcRepository, haRepository, clock);
+        heikinAshiService =
+                new HeikinAshiService(repository, ohlcRepository, haRepository, new CommonsHeikinAshiEngine(), clock);
         patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
         RetryConfig retryConfig = new RetryConfig();
         retryConfig.setMaxAttempts(3);

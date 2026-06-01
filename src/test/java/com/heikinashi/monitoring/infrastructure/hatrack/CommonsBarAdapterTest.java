@@ -33,18 +33,16 @@ class CommonsBarAdapterTest {
         Instant t0 = Instant.parse("2026-05-05T00:00:00Z");
         Instant t1 = Instant.parse("2026-05-06T00:00:00Z");
         Instant t2 = Instant.parse("2026-05-07T00:00:00Z");
-        List<HABar> domain =
-                List.of(
-                        domainHa(t0, "10", "12", "9", "11"),
-                        domainHa(t1, "11", "13", "10", "12"),
-                        domainHa(t2, "12", "14", "11", "13"));
+        List<HABar> domain = List.of(
+                domainHa(t0, "10", "12", "9", "11"),
+                domainHa(t1, "11", "13", "10", "12"),
+                domainHa(t2, "12", "14", "11", "13"));
 
         org.hatrack.commons.HASeries series = CommonsBarAdapter.toCommonsHaSeries(domain);
 
         assertThat(series.bars()).hasSize(3);
         // timestamp ordering preserved
-        assertThat(series.bars().stream().map(org.hatrack.commons.HABar::time))
-                .containsExactly(t0, t1, t2);
+        assertThat(series.bars().stream().map(org.hatrack.commons.HABar::time)).containsExactly(t0, t1, t2);
         // open/high/low/close equal by BigDecimal compareTo
         for (int i = 0; i < domain.size(); i++) {
             HABar d = domain.get(i);
@@ -76,25 +74,23 @@ class CommonsBarAdapterTest {
     void ohlc_round_trips_through_commons_with_supplied_metadata() {
         Instant t = Instant.parse("2026-05-06T00:00:00Z");
         Instant ingestedAt = Instant.parse("2026-05-07T22:00:00Z");
-        OHLCBar original =
-                new OHLCBar(
-                        INSTR,
-                        Timeframe.D1,
-                        t,
-                        new BigDecimal("100"),
-                        new BigDecimal("110"),
-                        new BigDecimal("95"),
-                        new BigDecimal("105"),
-                        Optional.of(new BigDecimal("12345")),
-                        "eodhd",
-                        ingestedAt);
+        OHLCBar original = new OHLCBar(
+                INSTR,
+                Timeframe.D1,
+                t,
+                new BigDecimal("100"),
+                new BigDecimal("110"),
+                new BigDecimal("95"),
+                new BigDecimal("105"),
+                Optional.of(new BigDecimal("12345")),
+                "eodhd",
+                ingestedAt);
 
         org.hatrack.commons.OHLCBar commons = CommonsBarAdapter.toCommons(original);
         assertThat(commons.time()).isEqualTo(t);
         assertThat(commons.volume()).contains(new BigDecimal("12345"));
 
-        OHLCBar back =
-                CommonsBarAdapter.fromCommons(commons, INSTR, Timeframe.D1, "eodhd", ingestedAt);
+        OHLCBar back = CommonsBarAdapter.fromCommons(commons, INSTR, Timeframe.D1, "eodhd", ingestedAt);
         assertThat(back).isEqualTo(original);
     }
 
