@@ -444,6 +444,7 @@
                         <exclude>com/heikinashi/monitoring/infrastructure/marketaux/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/yahoo/**</exclude>
                         <exclude>com/heikinashi/monitoring/infrastructure/chart/**</exclude>
+                        <exclude>com/heikinashi/monitoring/infrastructure/strategy/**</exclude>
                         <exclude>com/heikinashi/monitoring/orchestration/**</exclude>
                     </excludes>
                 </configuration>

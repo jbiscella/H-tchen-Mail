@@ -9,6 +9,7 @@ import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
 import com.heikinashi.monitoring.application.InMemoryPendingAlertRepository;
+import com.heikinashi.monitoring.application.InMemoryStrategyRepository;
 import com.heikinashi.monitoring.application.IngestionConfig;
 import com.heikinashi.monitoring.application.IngestionService;
 import com.heikinashi.monitoring.application.InstrumentConfigService;
@@ -32,6 +33,7 @@ import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsHeikinAshiEngine;
+import com.heikinashi.monitoring.infrastructure.strategy.NachtkrappStrategyDetector;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -57,6 +59,7 @@ public final class World {
     private final InMemoryHaRepository haRepository = new InMemoryHaRepository();
     private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
     private final InMemoryPendingAlertRepository pendingAlerts = new InMemoryPendingAlertRepository();
+    private final InMemoryStrategyRepository strategyRepository = new InMemoryStrategyRepository();
     private final ScriptedChartRenderer chartRenderer = new ScriptedChartRenderer();
     private final ScriptedAiAnalyst aiAnalyst = new ScriptedAiAnalyst();
     private final CapturingEmailSender emailSender = new CapturingEmailSender();
@@ -133,7 +136,8 @@ public final class World {
         ingestionService = new IngestionService(repository, ohlcRepository, marketData, clock, ingCfg, millis -> {});
         heikinAshiService =
                 new HeikinAshiService(repository, ohlcRepository, haRepository, new CommonsHeikinAshiEngine(), clock);
-        patternDetectionService = new PatternDetectionService(repository, ohlcRepository, haRepository, clock);
+        patternDetectionService = new PatternDetectionService(
+                repository, ohlcRepository, haRepository, strategyRepository, new NachtkrappStrategyDetector(), clock);
         RetryConfig retryConfig = new RetryConfig();
         retryConfig.setMaxAttempts(3);
         retryConfig.setDelaySeconds((int) Duration.ofHours(1).toSeconds());
