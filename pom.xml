@@ -37,6 +37,14 @@
 
         <aws.sdk.version>2.30.0</aws.sdk.version>
         <jfreechart.version>1.5.5</jfreechart.version>
+
+        <!--
+            ha-track: shared Heikin Ashi kernel + libraries, published to Maven
+            Central under groupId net.jacopobiscella. Pinned to the same version
+            wichtelm-app consumes so the two tools share one canonical kernel.
+            Packages are org.hatrack.* (commons/nachtkrapp/frauholle/heerwisch).
+        -->
+        <hatrack.version>0.55.0-alpha</hatrack.version>
         <commons.email.version>2.0.0-M1</commons.email.version>
         <logstash.encoder.version>8.0</logstash.encoder.version>
 
@@ -156,7 +164,40 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
-        <!-- Charting -->
+        <!--
+            ha-track libraries (Blocks 11-16). Foundational adoption: the shared
+            kernel (commons) plus the feature libraries that supersede H-tchen's
+            custom HA / ingestion / chart / detection code. All at ${hatrack.version}.
+            org.jfree:jfreechart stays declared for the legacy renderer until
+            Block 14 removes it; heerwisch-jfreechart pulls its own JFreeChart.
+        -->
+        <dependency>
+            <groupId>net.jacopobiscella</groupId>
+            <artifactId>commons</artifactId>
+            <version>${hatrack.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.jacopobiscella</groupId>
+            <artifactId>nachtkrapp</artifactId>
+            <version>${hatrack.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.jacopobiscella</groupId>
+            <artifactId>frau-holle-eodhd</artifactId>
+            <version>${hatrack.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.jacopobiscella</groupId>
+            <artifactId>heerwisch-api</artifactId>
+            <version>${hatrack.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.jacopobiscella</groupId>
+            <artifactId>heerwisch-jfreechart</artifactId>
+            <version>${hatrack.version}</version>
+        </dependency>
+
+        <!-- Charting (legacy renderer; superseded by heerwisch in Block 14) -->
         <dependency>
             <groupId>org.jfree</groupId>
             <artifactId>jfreechart</artifactId>
