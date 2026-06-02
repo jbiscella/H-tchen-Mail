@@ -52,11 +52,15 @@ class SampleAlertEmailRenderTest {
     @Test
     void renders_a_standalone_sample_alert_email() throws IOException {
         InMemoryHaRepository haRepo = new InMemoryHaRepository();
-        double price = 100;
+        // ~40 bars of a wavy uptrend so SMA/EMA/RSI overlays are meaningful,
+        // ending on a green bar after a short red streak (a bullish reversal).
+        double price = 95;
         HABar last = null;
-        for (int d = 0; d < 16; d++) {
+        for (int d = 0; d < 40; d++) {
+            double drift = 0.25;
+            double wave = 3.0 * Math.sin(d / 3.5);
             double open = price;
-            double close = price + (d < 11 ? -1.4 : 2.6); // red streak then a green flip
+            double close = 95 + drift * d + wave + (d >= 37 ? (d - 36) * 1.3 : 0);
             HABar bar = ha(d, open, close);
             haRepo.putBar(bar, Optional.empty());
             price = close;

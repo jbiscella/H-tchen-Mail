@@ -41,17 +41,17 @@ class HeerwischChartRendererTest {
     @Test
     void renders_a_png_chart_with_the_triggering_candle_highlighted() throws IOException {
         InMemoryHaRepository haRepo = new InMemoryHaRepository();
-        // A 12-bar HA window; the last bar is the detected one.
-        double price = 100;
+        // ~40-bar HA window (a wavy uptrend) so the SMA/EMA overlays and the RSI
+        // subplot all have enough bars to render; the last bar is the detected one.
         HABar last = null;
-        for (int d = 0; d < 12; d++) {
-            double open = price;
-            double close = price + (d % 2 == 0 ? 2.5 : -1.5);
+        for (int d = 0; d < 40; d++) {
+            double base = 95 + 0.25 * d + 3.0 * Math.sin(d / 3.5);
+            double open = 95 + 0.25 * (d - 1) + 3.0 * Math.sin((d - 1) / 3.5);
+            double close = base + (d >= 37 ? (d - 36) * 1.2 : 0);
             double high = Math.max(open, close) + 1.2;
             double low = Math.min(open, close) - 1.1;
             HABar bar = ha(d, s(open), s(high), s(low), s(close));
             haRepo.putBar(bar, Optional.empty());
-            price = close;
             last = bar;
         }
 

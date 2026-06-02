@@ -8,14 +8,19 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import org.hatrack.commons.PriceSource;
 import org.hatrack.heerwisch.api.spec.Annotation;
 import org.hatrack.heerwisch.api.spec.ChartSpec;
+import org.hatrack.heerwisch.api.spec.ChartSpecBuilder;
 import org.hatrack.heerwisch.api.spec.ImageFormat;
+import org.hatrack.heerwisch.api.spec.Indicator;
 import org.hatrack.heerwisch.api.spec.LayoutSpec;
+import org.hatrack.heerwisch.api.spec.Pane;
 import org.hatrack.heerwisch.jfreechart.JFreeChartRenderer;
 
 /**
@@ -81,10 +86,34 @@ public class HeerwischChartRenderer implements ChartRenderer {
         // of the lookback window, satisfying heerwisch's V7 (highlight on a real bar).
         Annotation.BarHighlight highlight = new Annotation.BarHighlight(
                 event.barTime(), event.barSnapshot().haClose(), event.subtype().wire());
-        return ChartSpec.builder()
+        ChartSpecBuilder builder = ChartSpec.builder()
                 .withSeries(CommonsBarAdapter.toCommonsHaSeries(bars))
                 .withLayout(layout)
-                .addAnnotation(highlight)
-                .build();
+                .addAnnotation(highlight);
+        addIndicators(builder, bars.size());
+        return builder.build();
+    }
+
+    /**
+     * Overlay the configured indicators on the HA series. heerwisch rejects an
+     * indicator whose period exceeds the window (V6), so each is added only when
+     * the lookback holds enough bars — a short bootstrap chart still renders, it
+     * just carries fewer overlays. HA series indicators read {@code HA_CLOSE}.
+     */
+    private void addIndicators(ChartSpecBuilder builder, int bars) {
+        int sma = config.getSmaPeriod();
+        if (sma > 0 && bars >= sma) {
+            builder.addIndicator(new Indicator.SMA(sma, PriceSource.HA_CLOSE), Pane.MAIN);
+        }
+        int ema = config.getEmaPeriod();
+        if (ema > 0 && bars >= ema) {
+            builder.addIndicator(new Indicator.EMA(ema, PriceSource.HA_CLOSE), Pane.MAIN);
+        }
+        int rsi = config.getRsiPeriod();
+        if (config.isShowRsi() && bars >= rsi) {
+            builder.addIndicator(
+                    new Indicator.RSI(rsi, new BigDecimal("70"), new BigDecimal("30"), PriceSource.HA_CLOSE),
+                    Pane.SUBPLOT_1);
+        }
     }
 }
