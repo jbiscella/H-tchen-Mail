@@ -12,8 +12,12 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import org.hatrack.commons.PriceSource;
+import org.hatrack.heerwisch.api.error.DriverInternalException;
 import org.hatrack.heerwisch.api.spec.Annotation;
 import org.hatrack.heerwisch.api.spec.ChartSpec;
 import org.hatrack.heerwisch.api.spec.ChartSpecBuilder;
@@ -37,25 +41,29 @@ import org.hatrack.heerwisch.jfreechart.JFreeChartRenderer;
  * unchanged, so the email MIME structure (multipart text+HTML, inline image CID)
  * is untouched — only the image producer changes.
  *
- * <p>The heerwisch driver is headless and deterministic (embedded DejaVu Sans),
- * so no display or server is required in the Lambda environment.
+ * <p>The chart-building idioms mirror wichtelm-app's {@code HtmlReportGenerator}
+ * for a consistent house style across the two heerwisch consumers: an
+ * interface-typed renderer built via {@link #newRenderer()}, a
+ * {@code LayoutSpec.builder()} layout, and a collect-then-place indicator loop
+ * that honours each indicator's default pane, assigns the rest to subplot slots,
+ * de-duplicates, and skips any whose period exceeds the window. The heerwisch
+ * driver is headless and deterministic (embedded DejaVu Sans), so no display or
+ * server is required in the Lambda environment.
  */
 @Singleton
 public class HeerwischChartRenderer implements ChartRenderer {
 
+    // HA charts read the Heikin-Ashi close (wichtelm charts raw OHLC and uses CLOSE).
+    private static final PriceSource SOURCE = PriceSource.HA_CLOSE;
+
     private final HaRepository haRepository;
     private final ChartConfig config;
-    private final JFreeChartRenderer renderer;
+    private final org.hatrack.heerwisch.api.port.ChartRenderer renderer;
 
     public HeerwischChartRenderer(HaRepository haRepository, ChartConfig config) {
         this.haRepository = haRepository;
         this.config = config;
-        try {
-            this.renderer = new JFreeChartRenderer();
-        } catch (org.hatrack.heerwisch.api.error.ChartRenderException e) {
-            // Font/driver init failure — surface as the domain render error.
-            throw new ChartRenderException(e);
-        }
+        this.renderer = newRenderer();
     }
 
     @Override
@@ -81,7 +89,10 @@ public class HeerwischChartRenderer implements ChartRenderer {
 
     private ChartSpec buildSpec(PatternEvent event, List<HABar> bars)
             throws org.hatrack.heerwisch.api.error.ChartRenderException {
-        LayoutSpec layout = new LayoutSpec.AutoLayoutSpec(config.getWidthPx(), config.getHeightPx(), ImageFormat.PNG);
+        LayoutSpec layout = LayoutSpec.builder()
+                .withSize(config.getWidthPx(), config.getHeightPx())
+                .withFormat(ImageFormat.PNG)
+                .build();
         // Highlight the detected candle at (bar_time, ha_close). Its time is part
         // of the lookback window, satisfying heerwisch's V7 (highlight on a real bar).
         Annotation.BarHighlight highlight = new Annotation.BarHighlight(
@@ -95,25 +106,54 @@ public class HeerwischChartRenderer implements ChartRenderer {
     }
 
     /**
-     * Overlay the configured indicators on the HA series. heerwisch rejects an
-     * indicator whose period exceeds the window (V6), so each is added only when
-     * the lookback holds enough bars — a short bootstrap chart still renders, it
-     * just carries fewer overlays. HA series indicators read {@code HA_CLOSE}.
+     * Overlay the configured indicators, mirroring wichtelm-app's placement: each
+     * indicator goes to its own default pane ({@code MAIN} overlays in place;
+     * oscillators cycle through the subplot slots), duplicates are collapsed, and
+     * any whose period exceeds the window is skipped (heerwisch rejects those with
+     * V6, and a short bootstrap chart should still render with fewer overlays).
      */
     private void addIndicators(ChartSpecBuilder builder, int bars) {
-        int sma = config.getSmaPeriod();
-        if (sma > 0 && bars >= sma) {
-            builder.addIndicator(new Indicator.SMA(sma, PriceSource.HA_CLOSE), Pane.MAIN);
+        List<Indicator> indicators = new ArrayList<>();
+        if (config.getSmaPeriod() > 0) {
+            indicators.add(new Indicator.SMA(config.getSmaPeriod(), SOURCE));
         }
-        int ema = config.getEmaPeriod();
-        if (ema > 0 && bars >= ema) {
-            builder.addIndicator(new Indicator.EMA(ema, PriceSource.HA_CLOSE), Pane.MAIN);
+        if (config.getEmaPeriod() > 0) {
+            indicators.add(new Indicator.EMA(config.getEmaPeriod(), SOURCE));
         }
-        int rsi = config.getRsiPeriod();
-        if (config.isShowRsi() && bars >= rsi) {
-            builder.addIndicator(
-                    new Indicator.RSI(rsi, new BigDecimal("70"), new BigDecimal("30"), PriceSource.HA_CLOSE),
-                    Pane.SUBPLOT_1);
+        if (config.isShowRsi()) {
+            indicators.add(new Indicator.RSI(
+                    config.getRsiPeriod(),
+                    new BigDecimal("70"),
+                    new BigDecimal("30"),
+                    SOURCE,
+                    Optional.of(Indicator.RsiVisualization.DANGER_ZONES_ON)));
+        }
+
+        Pane[] subPanes = {
+            Pane.SUBPLOT_1, Pane.SUBPLOT_2, Pane.SUBPLOT_3, Pane.SUBPLOT_4,
+            Pane.SUBPLOT_5, Pane.SUBPLOT_6, Pane.SUBPLOT_7, Pane.SUBPLOT_8
+        };
+        int subPaneIdx = 0;
+        Set<String> seen = new HashSet<>();
+        for (Indicator indicator : indicators) {
+            if (bars < indicator.minBars() || !seen.add(indicator.toString())) {
+                continue;
+            }
+            if (indicator.defaultPane() == Pane.MAIN) {
+                builder.addIndicator(indicator);
+            } else if (subPaneIdx < subPanes.length) {
+                builder.addIndicator(indicator, subPanes[subPaneIdx]);
+                subPaneIdx++;
+            }
+        }
+    }
+
+    private static org.hatrack.heerwisch.api.port.ChartRenderer newRenderer() {
+        try {
+            return new JFreeChartRenderer();
+        } catch (DriverInternalException e) {
+            // Font/driver init failure — surface as the domain render error.
+            throw new ChartRenderException(e);
         }
     }
 }
