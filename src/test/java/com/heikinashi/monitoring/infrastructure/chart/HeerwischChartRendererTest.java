@@ -96,6 +96,42 @@ class HeerwischChartRendererTest {
         Files.write(out, image.bytes());
     }
 
+    @Test
+    void renders_even_when_the_triggering_bar_is_missing_from_history() {
+        // SNAPSHOT_ONLY: the triggering HA bar was deleted by a later ingest before
+        // this queued alert was retried, so the lookback is empty.
+        InMemoryHaRepository haRepo = new InMemoryHaRepository();
+        ChartConfig config = new ChartConfig();
+        config.setLookbackBars(30);
+
+        PatternEvent event = new PatternEvent(
+                INSTR,
+                "AAPL",
+                "NASDAQ",
+                Timeframe.D1,
+                T0.plus(5, ChronoUnit.DAYS),
+                PatternKind.COLOR_CHANGE,
+                PatternSubtype.BULLISH_REVERSAL,
+                java.util.Map.of("min_streak_length", 3),
+                new BarSnapshot(
+                        new BigDecimal("100"),
+                        new BigDecimal("110"),
+                        new BigDecimal("95"),
+                        new BigDecimal("105"),
+                        Optional.of(new BigDecimal("12345")),
+                        new BigDecimal("101"),
+                        new BigDecimal("104"),
+                        new BigDecimal("100"),
+                        new BigDecimal("103")),
+                Instant.parse("2026-05-07T22:00:00Z"));
+
+        // The renderer synthesizes the triggering bar from the snapshot so the
+        // highlight still points at a real bar — no ChartRenderException.
+        ChartImage image = new HeerwischChartRenderer(haRepo, config).renderChart(event);
+        assertThat(image.contentType()).isEqualTo("image/png");
+        assertThat(image.bytes()).startsWith(PNG_MAGIC);
+    }
+
     private static String s(double v) {
         return new BigDecimal(v).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
