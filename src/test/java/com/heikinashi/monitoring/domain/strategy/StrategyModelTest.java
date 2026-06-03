@@ -16,7 +16,7 @@ class StrategyModelTest {
         return new StrategyScenario(
                 "entry",
                 "long_entry",
-                List.of(new MarketCondition.Doji(new java.math.BigDecimal("0.1"))),
+                List.of("ha_doji()"),
                 Optional.of("flat"),
                 Optional.of("entry * 0.98"),
                 Optional.of("entry * 1.05"));
@@ -55,6 +55,6 @@ class StrategyModelTest {
     void strategy_round_trips_its_scenarios() {
         Strategy strategy = new Strategy("s", List.of(scenario()));
         assertThat(strategy.scenarios()).hasSize(1);
-        assertThat(strategy.scenarios().get(0).conditions()).hasSize(1);
+        assertThat(strategy.scenarios().get(0).conditions()).containsExactly("ha_doji()");
     }
 }

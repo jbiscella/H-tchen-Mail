@@ -33,7 +33,7 @@ import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.UuidGenerator;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsHeikinAshiEngine;
-import com.heikinashi.monitoring.infrastructure.strategy.NachtkrappStrategyDetector;
+import com.heikinashi.monitoring.infrastructure.strategy.DslStrategyDetector;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -137,7 +137,7 @@ public final class World {
         heikinAshiService =
                 new HeikinAshiService(repository, ohlcRepository, haRepository, new CommonsHeikinAshiEngine(), clock);
         patternDetectionService = new PatternDetectionService(
-                repository, ohlcRepository, haRepository, strategyRepository, new NachtkrappStrategyDetector(), clock);
+                repository, ohlcRepository, haRepository, strategyRepository, new DslStrategyDetector(), clock);
         RetryConfig retryConfig = new RetryConfig();
         retryConfig.setMaxAttempts(3);
         retryConfig.setDelaySeconds((int) Duration.ofHours(1).toSeconds());

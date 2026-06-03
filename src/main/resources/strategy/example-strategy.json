@@ -1,0 +1,24 @@
+{
+  "name": "rsi-reversal-long",
+  "scenarios": [
+    {
+      "name": "oversold-bounce-entry",
+      "role": "long_entry",
+      "positionPrecondition": "flat",
+      "stopLoss": "entry * 0.98",
+      "takeProfit": "entry * 1.05",
+      "conditions": [
+        "rsi(14) crosses below 30",
+        "ha_bullish_reversal(3)"
+      ]
+    },
+    {
+      "name": "momentum-exit",
+      "role": "long_exit",
+      "positionPrecondition": "a long position is open",
+      "conditions": [
+        "macd_bearish_cross()"
+      ]
+    }
+  ]
+}

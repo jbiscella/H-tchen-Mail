@@ -44,6 +44,9 @@ public class PatternDetectionService {
 
     private static final Logger LOG = LoggerFactory.getLogger(PatternDetectionService.class);
 
+    /** HA history window read for strategy evaluation, sized to warm up typical DSL indicators. */
+    private static final int STRATEGY_LOOKBACK_BARS = 300;
+
     private final InstrumentRepository instruments;
     private final OhlcRepository ohlc;
     private final HaRepository ha;
@@ -185,8 +188,10 @@ public class PatternDetectionService {
      * alert (one line per matched scenario). Empty when there is no strategy, no
      * new bar, or no scenario became true on the latest bar.
      *
-     * <p>Reads only HA history (purity); the latest-bar restriction protects
-     * against bootstrap alert storms exactly as the fixed-pattern path does.
+     * <p>Reads only the raw OHLC series (purity). dsl-eval computes Heikin-Ashi
+     * itself for HA primitives, so the seam is fed raw OHLC (wichtelm parity), not
+     * the HA series; the latest-bar restriction protects against bootstrap alert
+     * storms exactly as the fixed-pattern path does.
      */
     public Optional<StrategyAlert> detectStrategyAlert(Instrument instrument, Timeframe tf, List<HABar> newHaBars) {
         if (newHaBars.isEmpty()) {
@@ -201,22 +206,20 @@ public class PatternDetectionService {
         sortedNew.sort(Comparator.comparing(HABar::barTime));
         Instant latest = sortedNew.get(sortedNew.size() - 1).barTime();
 
-        // Read enough history for the longest-period condition in the strategy,
-        // then append the new bars, so the latest bar has its full lookback.
-        int lookback = strategyDetector.barsNeeded(strategy.get());
-        List<HABar> historyBefore =
-                ha.findLastNBefore(instrument.id(), tf, sortedNew.get(0).barTime(), lookback);
-        List<HABar> chain = new ArrayList<>(historyBefore.size() + sortedNew.size());
-        chain.addAll(historyBefore);
-        chain.addAll(sortedNew);
-        // Evaluate only the latest bar: trim any chain bars after it (none, normally).
-        List<HABar> upToLatest = new ArrayList<>();
-        for (HABar bar : chain) {
-            if (!bar.barTime().isAfter(latest)) {
-                upToLatest.add(bar);
-            }
-        }
-        return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), upToLatest, clock.instant());
+        // Read a generous raw-OHLC window (ending at the latest ingested bar) so the
+        // strategy's dsl-eval indicators have room to warm up. The DSL strings don't
+        // expose their periods here, so we use a fixed window rather than a computed
+        // minimum.
+        Instant from = latest.minusSeconds((long) STRATEGY_LOOKBACK_BARS * periodSeconds(tf));
+        List<OHLCBar> ohlcSeries = ohlc.findRange(instrument.id(), tf, from, latest);
+        return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
+    }
+
+    private static long periodSeconds(Timeframe tf) {
+        return switch (tf) {
+            case D1 -> 86_400L;
+            case W1 -> 604_800L;
+        };
     }
 
     private PatternEvent buildEvent(

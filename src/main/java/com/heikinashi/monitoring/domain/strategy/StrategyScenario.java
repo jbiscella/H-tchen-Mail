@@ -5,9 +5,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * One scenario of a strategy (Blocks 15-16). All {@code conditions} are market
- * conditions H-tchen evaluates and are ANDed: the scenario is true on a bar only
- * when every condition is true on that bar.
+ * One scenario of a strategy (Blocks 15-16). Each entry in {@code conditions} is
+ * a dsl-eval expression STRING (e.g. {@code "rsi(14) crosses below 30"},
+ * {@code "ha_bullish_reversal(3)"}); they are ANDed: the scenario is true on a bar
+ * only when every condition expression evaluates true on that bar.
  *
  * <p>{@code role} is a free-text display label (e.g. "long_entry", "long_exit") —
  * shown verbatim, never branched on. {@code positionPrecondition},
@@ -18,7 +19,7 @@ import java.util.Optional;
 public record StrategyScenario(
         String name,
         String role,
-        List<MarketCondition> conditions,
+        List<String> conditions,
         Optional<String> positionPrecondition,
         Optional<String> stopLoss,
         Optional<String> takeProfit) {
