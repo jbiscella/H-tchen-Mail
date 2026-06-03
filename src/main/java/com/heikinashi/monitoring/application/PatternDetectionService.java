@@ -73,13 +73,13 @@ public class PatternDetectionService {
         if (newHaBars.isEmpty()) {
             return List.of();
         }
-        // Block 15: a strategy supersedes the three fixed patterns for its
-        // instrument — no legacy color_change / strong_candle / doji alert is
-        // produced; only the strategy's scenarios can raise alerts (see
-        // detectStrategyAlert).
-        if (strategies.findByInstrumentId(instrument.id()).isPresent()) {
-            return List.of();
-        }
+        // NOTE: Block 15 envisages a strategy *superseding* the three fixed patterns
+        // for its instrument. That coupling is deliberately NOT applied here yet:
+        // the strategy path (detectStrategyAlert) is not dispatched anywhere, so
+        // suppressing the legacy alerts on strategy presence would mean an instrument
+        // with a strategy emits no alerts at all once a real StrategyRepository
+        // replaces the NoOp. Legacy detection therefore runs regardless of strategy
+        // presence until strategy dispatch is wired (PR #79 review P1).
         InstrumentConfig cfg = instruments
                 .findConfigById(instrument.id())
                 .orElseThrow(() -> new InstrumentNotFoundException(instrument.id()));
@@ -210,6 +210,13 @@ public class PatternDetectionService {
         // strategy's dsl-eval indicators have room to warm up. The DSL strings don't
         // expose their periods here, so we use a fixed window rather than a computed
         // minimum.
+        //
+        // TODO(PR #79 review #5): this subtracts calendar seconds, so for D1 it yields
+        // ~200 trading bars over ~300 calendar days and can starve a long indicator
+        // (e.g. rsi(250)) of warmup. When the strategy path is actually wired/dispatched,
+        // switch to a bar-counted read (last N persisted bars, as wichtelm does via
+        // barsStrictlyBefore) and validate against real bars. Inert today: this path is
+        // unreachable while the StrategyRepository is the NoOp.
         Instant from = latest.minusSeconds((long) STRATEGY_LOOKBACK_BARS * periodSeconds(tf));
         List<OHLCBar> ohlcSeries = ohlc.findRange(instrument.id(), tf, from, latest);
         return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
