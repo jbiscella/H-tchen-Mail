@@ -6,7 +6,7 @@ import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.TickerNotFoundException;
 import com.heikinashi.monitoring.infrastructure.eodhd.EodhdConfig;
-import com.heikinashi.monitoring.infrastructure.eodhd.EodhdMarketDataProvider;
+import com.heikinashi.monitoring.infrastructure.eodhd.FrauHolleEodhdMarketDataProvider;
 import io.cucumber.java.Before;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Assumptions;
 
 /**
  * Cucumber glue for the EODHD demo-key smoke feature. Wires up the real
- * {@link EodhdMarketDataProvider} pointing at {@code https://eodhd.com/api}
+ * {@link FrauHolleEodhdMarketDataProvider} pointing at {@code https://eodhd.com/api}
  * with {@code api_token=demo}. The hook in
  * {@link #skipUnlessExplicitlyEnabled()} gates on a system property /
  * environment variable so this network-dependent IT stays opt-in — CI
@@ -36,7 +36,7 @@ public final class EodhdDemoSteps {
     private static final String BASE_URL = "https://eodhd.com/api";
     private static final int TIMEOUT_SECONDS = 10;
 
-    private EodhdMarketDataProvider provider;
+    private FrauHolleEodhdMarketDataProvider provider;
     private List<OHLCBar> lastResult;
     private Throwable lastError;
 
@@ -61,7 +61,7 @@ public final class EodhdDemoSteps {
         cfg.setApiKey(DEMO_KEY);
         cfg.setBaseUrl(BASE_URL);
         cfg.setTimeoutSeconds(TIMEOUT_SECONDS);
-        provider = new EodhdMarketDataProvider(cfg, Clock.systemUTC());
+        provider = new FrauHolleEodhdMarketDataProvider(cfg, Clock.systemUTC());
         lastResult = null;
         lastError = null;
     }

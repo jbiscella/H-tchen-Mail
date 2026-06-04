@@ -59,6 +59,13 @@ monitoring:
     width-px: 900
     height-px: 500
     show-volume: false
+    # Indicator overlays drawn by heerwisch on the HA chart. An indicator is
+    # only plotted when the lookback window holds enough bars for it; a period
+    # of 0 disables that overlay.
+    sma-period: 10
+    ema-period: 20
+    show-rsi: true
+    rsi-period: 14
   email:
     subject-prefix: "[HA Alert]"
     charset: UTF-8

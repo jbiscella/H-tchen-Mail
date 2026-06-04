@@ -551,7 +551,7 @@ Feature: Per-Instrument Configuration — Domain Operations
     Given two concurrent UpdateItem calls on the same CONFIG
     When both succeed
     Then the latest write wins
-    Note: optimistic locking via "version" attribute is deferred.
+    Note: optimistic locking via "version" attribute is deferred (see "Deferred / known issues", item 4).
 ```
 
 ---
@@ -2336,7 +2336,7 @@ Feature: Monitor an imported strategy, stateless
 **Out of scope**
 - Evaluating any entry_price-relative expression (always memo; broker executes).
 - Tracking position state (flat by design).
-- Stateless-parametric evaluation via a user-supplied entry price and a future mail "commit" button (deferred; not on the critical path).
+- Stateless-parametric evaluation via a user-supplied entry price and a future mail "commit" button (deferred; not on the critical path — see "Deferred / known issues", item 3).
 - Order execution, paper-trading, P&L.
 - Verifying the imported strategy matches the one backtested in wichtelm (no bridge between the tools — separate concern).
 
@@ -2364,6 +2364,69 @@ Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), 
 
 - ha-track: NO CHANGE.
 - wichtelm-app: a `.strat` -> H-tchen JSON export utility. Must verify each `.strat` primitive maps to a nachtkrapp `DetectionRule`; gaps surface there. Optional, later.
+
+---
+
+## Deferred / known issues
+
+Single place collecting everything intentionally postponed. Each entry: what it
+is, why it's deferred, and when/how to address it.
+
+1. **Strategy dispatch path is dormant.**
+   *What*: `detectStrategyAlert` is wired for *evaluation* (it imports a strategy,
+   runs dsl-eval over the OHLC series, and produces a `StrategyAlert`), but nothing
+   dispatches strategy alerts to email, and `StrategyRepository` is the `NoOp`
+   implementation, so no instrument can actually hold a strategy. The whole strategy
+   path is therefore unreachable in production today.
+   *Why deferred*: the strategy JSON format isn't proven against real data yet, and
+   the "one email, N lines" dispatch wiring was scoped out.
+   *Safety taken*: the Block 15 "a strategy supersedes the fixed patterns on strategy
+   presence" coupling has been **neutralized** — `detectPatterns` no longer returns
+   empty when a strategy exists — so flipping the repo from `NoOp` to a real one later
+   cannot silently mute an instrument (legacy suppressed + strategy alerts never sent).
+   *To address*: wire `detectStrategyAlert` into the dispatch/email path (subject +
+   `StrategyAlertText` body via the existing `EmailSender`) and restore the supersede
+   semantics, once the JSON format is proven and a real `StrategyRepository` exists.
+
+2. **Strategy lookback uses calendar seconds, not bar count** (PR #79 review #5).
+   *What*: `PatternDetectionService.detectStrategyAlert` sizes its OHLC read by
+   subtracting `STRATEGY_LOOKBACK_BARS × period_seconds(tf)` (wall-clock seconds)
+   rather than requesting a bar count.
+   *Why deferred*: inert while the dispatch path is dormant (item 1) — the path is
+   unreachable, so the window never actually drives an alert; and it must be tested
+   against real bars, which aren't available without the live path.
+   *Why it's a bug when live*: market gaps (weekends, holidays, missing data) make a
+   calendar window yield **fewer bars than required**, so an indicator computes on a
+   short window and diverges from the backtest — a silent parity break.
+   *To fix at wiring time*: the lookback must request a **bar count** equal to the
+   MAX warmup required across all conditions of all scenarios (e.g. `sma(200)` needs
+   200, `rsi(14)` needs 14 → use 200). This is the runtime twin of the import-time
+   `IndicatorWarmupException` check that already exists. Verified reference: wichtelm
+   windows by bar count (`barsStrictlyBefore` / warmup-by-bars), so bar-count is the
+   parity-correct approach. The code carries a `TODO(PR #79 review #5)` at the spot.
+
+3. **Stateless-parametric evaluation via a future mail "commit" button.**
+   *What*: a user-supplied entry price would let `entry_price`-relative conditions
+   (stop-loss / take-profit) be *evaluated* rather than only quoted as memo. (Also
+   noted under Block 16 → Out of scope.)
+   *Why deferred*: H-tchen is stateless by design and the strategy format isn't
+   proven yet; not on the critical path.
+   *To address*: revisit once the strategy format is proven, alongside the dispatch
+   work (item 1) — would need a mail-side "commit" affordance that feeds an entry
+   price back into evaluation.
+
+4. **Optimistic locking via the `version` attribute.**
+   *What*: per-instrument `CONFIG` updates are last-write-wins; there is no optimistic
+   concurrency guard. (Also noted under Block 2 → "Concurrent updates (last-write-wins)".)
+   *Why deferred*: concurrent config edits are rare for the current CLI-driven,
+   single-operator workflow.
+   *To address*: add a `version` attribute and a `ConditionExpression` on the
+   `UpdateItem` if/when a multi-writer UI makes concurrent edits likely.
+
+### From code (TODO/FIXME)
+
+- `src/main/java/com/heikinashi/monitoring/application/PatternDetectionService.java:214`
+  — `TODO(PR #79 review #5)` on the calendar-seconds lookback (item 2 above).
 
 ---
 
