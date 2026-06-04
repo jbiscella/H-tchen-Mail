@@ -45,11 +45,54 @@ public class ChartConfig {
         this.heightPx = heightPx;
     }
 
+    @Min(0)
+    private int smaPeriod = 10;
+
+    @Min(0)
+    private int emaPeriod = 20;
+
+    private boolean showRsi = true;
+
+    @Min(1)
+    private int rsiPeriod = 14;
+
     public boolean isShowVolume() {
         return showVolume;
     }
 
     public void setShowVolume(boolean showVolume) {
         this.showVolume = showVolume;
+    }
+
+    public int getSmaPeriod() {
+        return smaPeriod;
+    }
+
+    public void setSmaPeriod(int smaPeriod) {
+        this.smaPeriod = smaPeriod;
+    }
+
+    public int getEmaPeriod() {
+        return emaPeriod;
+    }
+
+    public void setEmaPeriod(int emaPeriod) {
+        this.emaPeriod = emaPeriod;
+    }
+
+    public boolean isShowRsi() {
+        return showRsi;
+    }
+
+    public void setShowRsi(boolean showRsi) {
+        this.showRsi = showRsi;
+    }
+
+    public int getRsiPeriod() {
+        return rsiPeriod;
+    }
+
+    public void setRsiPeriod(int rsiPeriod) {
+        this.rsiPeriod = rsiPeriod;
     }
 }

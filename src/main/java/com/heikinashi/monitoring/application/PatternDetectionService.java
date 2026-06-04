@@ -15,6 +15,10 @@ import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.PatternsConfig;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.InstrumentNotFoundException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyDetector;
+import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Instant;
@@ -40,16 +44,28 @@ public class PatternDetectionService {
 
     private static final Logger LOG = LoggerFactory.getLogger(PatternDetectionService.class);
 
+    /** HA history window read for strategy evaluation, sized to warm up typical DSL indicators. */
+    private static final int STRATEGY_LOOKBACK_BARS = 300;
+
     private final InstrumentRepository instruments;
     private final OhlcRepository ohlc;
     private final HaRepository ha;
+    private final StrategyRepository strategies;
+    private final StrategyDetector strategyDetector;
     private final Clock clock;
 
     public PatternDetectionService(
-            InstrumentRepository instruments, OhlcRepository ohlc, HaRepository ha, Clock clock) {
+            InstrumentRepository instruments,
+            OhlcRepository ohlc,
+            HaRepository ha,
+            StrategyRepository strategies,
+            StrategyDetector strategyDetector,
+            Clock clock) {
         this.instruments = instruments;
         this.ohlc = ohlc;
         this.ha = ha;
+        this.strategies = strategies;
+        this.strategyDetector = strategyDetector;
         this.clock = clock;
     }
 
@@ -57,6 +73,13 @@ public class PatternDetectionService {
         if (newHaBars.isEmpty()) {
             return List.of();
         }
+        // NOTE: Block 15 envisages a strategy *superseding* the three fixed patterns
+        // for its instrument. That coupling is deliberately NOT applied here yet:
+        // the strategy path (detectStrategyAlert) is not dispatched anywhere, so
+        // suppressing the legacy alerts on strategy presence would mean an instrument
+        // with a strategy emits no alerts at all once a real StrategyRepository
+        // replaces the NoOp. Legacy detection therefore runs regardless of strategy
+        // presence until strategy dispatch is wired (PR #79 review P1).
         InstrumentConfig cfg = instruments
                 .findConfigById(instrument.id())
                 .orElseThrow(() -> new InstrumentNotFoundException(instrument.id()));
@@ -157,6 +180,53 @@ public class PatternDetectionService {
             }
         }
         return events;
+    }
+
+    /**
+     * Block 15-16: if the instrument is monitored by an imported strategy,
+     * evaluate it against the latest freshly computed bar and return the single
+     * alert (one line per matched scenario). Empty when there is no strategy, no
+     * new bar, or no scenario became true on the latest bar.
+     *
+     * <p>Reads only the raw OHLC series (purity). dsl-eval computes Heikin-Ashi
+     * itself for HA primitives, so the seam is fed raw OHLC (wichtelm parity), not
+     * the HA series; the latest-bar restriction protects against bootstrap alert
+     * storms exactly as the fixed-pattern path does.
+     */
+    public Optional<StrategyAlert> detectStrategyAlert(Instrument instrument, Timeframe tf, List<HABar> newHaBars) {
+        if (newHaBars.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<Strategy> strategy = strategies.findByInstrumentId(instrument.id());
+        if (strategy.isEmpty()) {
+            return Optional.empty();
+        }
+
+        List<HABar> sortedNew = new ArrayList<>(newHaBars);
+        sortedNew.sort(Comparator.comparing(HABar::barTime));
+        Instant latest = sortedNew.get(sortedNew.size() - 1).barTime();
+
+        // Read a generous raw-OHLC window (ending at the latest ingested bar) so the
+        // strategy's dsl-eval indicators have room to warm up. The DSL strings don't
+        // expose their periods here, so we use a fixed window rather than a computed
+        // minimum.
+        //
+        // TODO(PR #79 review #5): this subtracts calendar seconds, so for D1 it yields
+        // ~200 trading bars over ~300 calendar days and can starve a long indicator
+        // (e.g. rsi(250)) of warmup. When the strategy path is actually wired/dispatched,
+        // switch to a bar-counted read (last N persisted bars, as wichtelm does via
+        // barsStrictlyBefore) and validate against real bars. Inert today: this path is
+        // unreachable while the StrategyRepository is the NoOp.
+        Instant from = latest.minusSeconds((long) STRATEGY_LOOKBACK_BARS * periodSeconds(tf));
+        List<OHLCBar> ohlcSeries = ohlc.findRange(instrument.id(), tf, from, latest);
+        return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
+    }
+
+    private static long periodSeconds(Timeframe tf) {
+        return switch (tf) {
+            case D1 -> 86_400L;
+            case W1 -> 604_800L;
+        };
     }
 
     private PatternEvent buildEvent(
