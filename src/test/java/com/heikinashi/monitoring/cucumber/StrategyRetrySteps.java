@@ -3,14 +3,15 @@ package com.heikinashi.monitoring.cucumber;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.AlertEnrichment;
-import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
+import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
@@ -21,7 +22,8 @@ import java.util.Optional;
 /**
  * SI-3c.3 — drives the strategy-alert retry path: enqueue-on-failure in
  * {@link com.heikinashi.monitoring.application.StrategyAlertDispatchService} and
- * recovery in {@link com.heikinashi.monitoring.application.StrategyRetryPollerService}.
+ * recovery in {@link com.heikinashi.monitoring.application.StrategyRetryPollerService},
+ * which re-renders the chart from the persisted strategy + bars.
  */
 public class StrategyRetrySteps {
 
@@ -52,30 +54,38 @@ public class StrategyRetrySteps {
         return alert;
     }
 
-    private void queue(int retryCount, boolean withChart) {
+    @Given("a strategy is persisted for the instrument")
+    public void a_strategy_is_persisted_for_the_instrument() {
+        Instrument inst = world.lastInstrument();
+        StrategyScenario scenario = new StrategyScenario(
+                "oversold-entry",
+                "long_entry",
+                List.of("rsi(14) crosses below 30"),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+        Strategy strategy = new Strategy("test-strategy", List.of(scenario));
+        world.strategyRepository().put(inst.id(), strategy);
+        world.setCurrentStrategy(strategy);
+        seedAlert();
+    }
+
+    @Given("no strategy is persisted for the instrument")
+    public void no_strategy_is_persisted_for_the_instrument() {
+        seedAlert(); // alert exists, but nothing is put into the strategy repository
+    }
+
+    @Given("a strategy pending alert is queued with retry_count {int} due now")
+    public void a_strategy_pending_alert_is_queued(int retryCount) {
         StrategyAlert alert = seedAlert();
-        Optional<ChartImage> chart = withChart
-                ? Optional.of(new ChartImage(new byte[] {(byte) 0x89, 'P', 'N', 'G'}, "image/png", 900, 500))
-                : Optional.empty();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),
                 alert,
-                chart,
                 retryCount,
                 world.now(),
                 new PendingAlert.LastError("LLM_ERROR", "seeded", world.now(), Optional.of("ai")),
                 world.now());
         world.pendingStrategyAlerts().enqueue(pending);
-    }
-
-    @Given("a strategy pending alert is queued with retry_count {int} and a stored chart due now")
-    public void queued_with_stored_chart(int retryCount) {
-        queue(retryCount, true);
-    }
-
-    @Given("a strategy pending alert is queued with retry_count {int} and no stored chart due now")
-    public void queued_without_stored_chart(int retryCount) {
-        queue(retryCount, false);
     }
 
     @When("the strategy retry poller runs")
@@ -92,23 +102,14 @@ public class StrategyRetrySteps {
         assertThat(pending.get().retryCount()).isEqualTo(retryCount);
     }
 
-    @Then("the enqueued strategy pending alert carries the rendered chart bytes")
-    public void the_enqueued_alert_carries_chart_bytes() {
-        Optional<PendingStrategyAlert> pending =
-                world.pendingStrategyAlerts().findByUid(PendingStrategyAlert.uidOf(world.currentStrategyAlert()));
-        assertThat(pending).isPresent();
-        assertThat(pending.get().chart()).isPresent();
-        assertThat(pending.get().chart().get().bytes()).isNotEmpty();
-    }
-
     @Then("the strategy dispatch counts queued {int}")
     public void the_strategy_dispatch_counts_queued(int n) {
         assertThat(world.lastDispatchSummary().queued()).isEqualTo(n);
     }
 
-    @Then("the strategy chart is not re-rendered")
-    public void the_strategy_chart_is_not_re_rendered() {
-        assertThat(world.strategyChartRenderer().callCount()).isZero();
+    @Then("the strategy chart is re-rendered from the persisted strategy")
+    public void the_strategy_chart_is_re_rendered() {
+        assertThat(world.strategyChartRenderer().callCount()).isGreaterThanOrEqualTo(1);
     }
 
     @Then("a full strategy email is sent to {string}")

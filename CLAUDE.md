@@ -247,17 +247,18 @@ strategy for the same instrument overwrites the single STRATEGY item.
 ### STRATEGY_PENDING_ALERT attributes
 
 A failed **strategy** dispatch (Component 1c, SI-3c.3) queues here instead of the
-`PENDING_ALERT` partition, because a strategy alert is not a `PatternEvent` and
-its chart cannot be re-derived from the alert alone — it needs the `Strategy` +
-the HA bar window. Rather than reconstruct those in the poller, the item stores
-the **already-rendered chart PNG bytes** (when the chart rendered) so the poller
-reuses them and only re-runs the AI analyst + re-sends the email.
+`PENDING_ALERT` partition, because a strategy alert is not a `PatternEvent`. The
+item stores **only the alert + retry bookkeeping — never the chart**: because the
+strategy is itself persisted (the `STRATEGY` item) and OHLC/HA bars are readable
+by count (`findLastN`), the retry poller **re-renders the chart** from the
+persisted `Strategy` + bars rather than carrying a (potentially >400 KB) PNG blob
+in the row. If the strategy was deleted between detection and retry, the poller
+sends a chart-degraded email.
 
 | Attribute       | Type    | Required | Notes                                                                       |
 |-----------------|---------|----------|-----------------------------------------------------------------------------|
 | `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
 | `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
-| `chart_png`     | String  | no       | base64 PNG of the rendered chart; **absent** when the chart stage itself failed (the poller then sends chart-degraded) |
 | `retry_count`   | Number  | yes      | 0..3                                                                        |
 | `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
 | `last_error`    | Map      | yes      | `{ code, message, ts, component }`                                          |
@@ -1304,7 +1305,7 @@ Increments:
 - **SI-3c** — dedicated dispatch of a `StrategyAlert`: chart (SI-3c.1) → AI → email → retry/audit, via `StrategyAlert`-aware port overloads (dispatch fork "A", faithful: preserves all matched lines / roles / memo).
 - **SI-3 (orchestration)** — `MonitoringRunService` calls `detectStrategyAlert` for strategy instruments and routes the `StrategyAlert` to the dedicated dispatch.
 - **SI-3a** — strategy persistence: a `STRATEGY` item (§2) + `DynamoDbStrategyRepository` replacing the `NoOp`. The item stores the verbatim importer JSON; `findByInstrumentId` reparses via `StrategyJsonImporter.fromJson`, `save` is an idempotent `PutItem`.
-- **SI-3c.3** — retry for strategy alerts: a `STRATEGY_PENDING_ALERT` item (§2) storing the rendered chart bytes + the StrategyAlert JSON, enqueued on a failed dispatch and recovered by a `StrategyRetryPollerService` (reuse chart, re-run AI, degrade after the cap). See Component 1c "Retry for strategy alerts".
+- **SI-3c.3** — retry for strategy alerts: a `STRATEGY_PENDING_ALERT` item (§2) storing the StrategyAlert JSON (no chart), enqueued on a failed dispatch and recovered by a `StrategyRetryPollerService` that **re-renders** the chart from the persisted `Strategy` + bars, re-runs AI, re-sends, audits, and degrades after the cap. See Component 1c "Retry for strategy alerts".
 
 **Trigger marker (display-only).** The matched bar carries a direction marker
 derived from each matched line's `role`, following wichtelm's capital-flow
@@ -1437,36 +1438,55 @@ Feature: Strategy alert dispatch (first attempt)
 
 #### Retry for strategy alerts (SI-3c.3)
 
-A failed strategy dispatch is **retried**, mirroring the legacy
-`PENDING_ALERT` mechanics (§9 "Retry queue mechanics") with one twist: a strategy
-chart cannot be re-derived from the alert alone (it needs the `Strategy` + the HA
-bar window), so the queued `STRATEGY_PENDING_ALERT` item (§2) **stores the
-already-rendered chart PNG bytes**. The poller therefore never reconstructs
-`Strategy` + bars — it reuses the stored bytes, re-runs the AI analyst from the
-stored alert, and re-sends.
+A failed strategy dispatch is **retried**, mirroring the legacy `PENDING_ALERT`
+mechanics (§9 "Retry queue mechanics"). Because the strategy is persisted (the
+`STRATEGY` item, SI-3a) and bars are readable by count (`findLastN`), the queued
+`STRATEGY_PENDING_ALERT` item (§2) stores **only the alert** — never the chart.
+The poller **re-renders** the chart from the persisted `Strategy` + bars (falling
+back to chart-degraded if the strategy was deleted), re-runs the AI analyst from
+the stored alert, and re-sends. This keeps the row small and removes the
+DynamoDB 400 KB item-size risk of inlining a PNG.
 
 | Behavior                                       | Rule                                                                              |
 |------------------------------------------------|-----------------------------------------------------------------------------------|
-| First transient failure (chart / AI / email)   | write `STRATEGY_PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code`, and `chart_png` when the chart had rendered |
-| Chart stage failed                             | no `chart_png` stored (the poller cannot re-render); any later send is chart-degraded |
+| First transient failure (chart / AI / email)   | write `STRATEGY_PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code` (no chart stored) |
 | Poller picks up due items                       | Query GSI2 with `gsi2Pk=RETRY_DUE_STRATEGY` and `gsi2Sk <= now`                   |
-| Poller, per item                                | reuse stored `chart_png` (no re-render); re-run `AiAnalyst.analyze(alert)`; send  |
-| On success                                      | DeleteItem `STRATEGY_PENDING_ALERT`                                               |
+| Poller, per item                                | reload `Strategy` + bars and **re-render** the chart (chart-degraded if the strategy is gone or render still fails); re-run `AiAnalyst.analyze(alert)`; send |
+| On success                                      | record the audit `ALERT` item; DeleteItem `STRATEGY_PENDING_ALERT`               |
 | On failure with `retry_count + 1 < 3`           | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated          |
-| On failure with `retry_count + 1 == 3`          | Send **degraded** email (stored chart if any; AI section empty if AI still fails); DeleteItem |
+| On failure with `retry_count + 1 == 3`          | Send **degraded** email (chart-degraded if render still fails; AI section empty if AI still fails); DeleteItem |
 | All recipients rejected on the **final** attempt | DeleteItem and give up — an invalid recipient list is permanent, so the poison item is dropped (logged) rather than bumped forever. SES being *down* (a `DependencyUnavailableException`) is transient and still bumps. |
 | No recipients at poll time                       | DeleteItem and skip                                                              |
 | Idempotency / races                             | enqueue `attribute_not_exists(pk)`; bump conditional on `retry_count` — same as legacy |
 
-The chart renderer (`HeerwischStrategyChartRenderer`) wraps **any** runtime failure
-(heerwisch/JFreeChart `RuntimeException`, not only the driver's checked
-`ChartRenderException`) as the domain `ChartRenderException`, so a render fault is
-caught by the dispatch's chart-stage handler and enqueued/degraded rather than
-escaping and failing the whole instrument run — same contract as the legacy
-`HeerwischChartRenderer`.
+**Chart window.** Both the first-attempt dispatch and the retry re-render read
+the chart's HA bars by the **same lookback as strategy evaluation**
+(`STRATEGY_LOOKBACK_BARS`), so any indicator a scenario references (and that was
+warm enough to fire the alert) has enough bars to render — otherwise
+`StrategyChartSpec.placeIndicators` would silently drop the very overlay that
+triggered the alert.
 
-The `retry-poller` Lambda (§10) runs **both** queues each tick: the legacy
-`PENDING_ALERT` batch then the `STRATEGY_PENDING_ALERT` batch.
+**Render-fault wrapping.** `HeerwischStrategyChartRenderer` wraps **any** runtime
+failure (heerwisch/JFreeChart `RuntimeException`, not only the driver's checked
+`ChartRenderException`) as the domain `ChartRenderException`, so a render fault is
+caught by the chart-stage handler and enqueued/degraded rather than failing the
+whole instrument run — same contract as the legacy `HeerwischChartRenderer`.
+
+**SES-fault wrapping.** `SesEmailSender.sendRaw` classifies **both** `SesV2Exception`
+and any other AWS-SDK `SdkException` (client-side timeout / network / credentials)
+as a transient `DependencyUnavailableException`, so a client-side send fault is
+caught by dispatch / poller and enqueued / bumped instead of escaping.
+
+**Audit.** A successful strategy send (first attempt *and* retry) records an
+`ALERT` audit item (§2) via `AlertAuditRepository.recordSentStrategyAlert`, reusing
+the legacy `ALERT` shape with `pattern = "strategy"`, `subtype = <strategy name>`,
+the delivered recipients, SES message-IDs, and enrichment — so strategy sends
+appear in the same compliance history as legacy alerts.
+
+**Handler isolation.** The `retry-poller` Lambda (§10) runs **both** queues each
+tick, each in its own guarded block: a runtime failure draining the legacy
+`PENDING_ALERT` batch does not abort the run before the `STRATEGY_PENDING_ALERT`
+batch (and vice-versa).
 
 ```gherkin
 Feature: Strategy alert retry
@@ -1478,30 +1498,37 @@ Feature: Strategy alert retry
     When the strategy alert is dispatched
     Then no strategy email is sent
     And a strategy pending alert is enqueued with retry_count 0
-    And the enqueued strategy pending alert carries the rendered chart bytes
     And the strategy dispatch counts queued 1
 
-  Scenario: The poller reuses the stored chart bytes and does not re-render
-    Given a strategy pending alert is queued with retry_count 0 and a stored chart due now
-    And the AI analyst and email now succeed
+  Scenario: The poller re-renders the chart and re-sends
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
     When the strategy retry poller runs
-    Then the strategy chart is not re-rendered
+    Then the strategy chart is re-rendered from the persisted strategy
     And a full strategy email is sent
     And the strategy pending alert is deleted
 
-  Scenario: Chart-stage failures degrade after the max attempts
-    Given a strategy pending alert is queued with retry_count 2 and no stored chart due now
-    And the AI analyst now succeeds
+  Scenario: A missing strategy at retry degrades to a chart-less email after the cap
+    Given no strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 2 due now
     When the strategy retry poller runs
     Then a degraded strategy email is sent without a chart
     And the strategy pending alert is deleted
 
   Scenario: A transient failure under the cap bumps the retry count
-    Given a strategy pending alert is queued with retry_count 0 and a stored chart due now
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
     And the AI analyst fails on the next 1 attempt
     When the strategy retry poller runs
     Then no strategy email is sent
     And the strategy pending alert retry_count is 1
+
+  Scenario: All recipients rejected on the final attempt drops the poison item
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 2 due now
+    And the email sender will reject recipient "alice@example.com"
+    When the strategy retry poller runs
+    Then the strategy pending alert is deleted
 ```
 
 ### Component 2 — AI Analyst (Bedrock Converse + tool-use loop)

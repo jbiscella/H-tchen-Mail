@@ -67,6 +67,43 @@ class DynamoDbAlertAuditRepositoryIT extends LocalStackITBase {
     }
 
     @Test
+    void recordSentStrategyAlert_persists_a_strategy_shaped_alert_item() {
+        com.heikinashi.monitoring.domain.strategy.StrategyAlert alert =
+                new com.heikinashi.monitoring.domain.strategy.StrategyAlert(
+                        "abc-123",
+                        "AAPL",
+                        "NASDAQ",
+                        Timeframe.D1,
+                        Instant.parse("2026-05-06T00:00:00Z"),
+                        "rsi-reversal-long",
+                        List.of(new com.heikinashi.monitoring.domain.strategy.StrategyAlertLine(
+                                "oversold-entry", "long_entry", Optional.empty(), Optional.empty(), Optional.empty())),
+                        Instant.parse("2026-05-07T22:00:00Z"));
+        Instant sentAt = Instant.parse("2026-05-07T22:30:00Z");
+        repo.recordSentStrategyAlert(
+                alert, AlertEnrichment.FULL, Set.of("alice@example.com"), List.of("ses-msg-9"), sentAt);
+
+        QueryResponse resp = CLIENT.query(QueryRequest.builder()
+                .tableName(TABLE_NAME)
+                .keyConditionExpression("pk = :pk AND begins_with(sk, :sk)")
+                .expressionAttributeValues(Map.of(
+                        ":pk", AttributeValue.fromS(Keys.instrumentPk(alert.instrumentId())),
+                        ":sk", AttributeValue.fromS(Keys.SK_ALERT_PREFIX)))
+                .build());
+
+        assertThat(resp.items()).hasSize(1);
+        Map<String, AttributeValue> item = resp.items().get(0);
+        assertThat(item.get("entity").s()).isEqualTo(Keys.ENTITY_ALERT);
+        assertThat(item.get("pattern").s()).isEqualTo("strategy");
+        assertThat(item.get("subtype").s()).isEqualTo("rsi-reversal-long");
+        assertThat(item.get("recipients").ss()).containsExactly("alice@example.com");
+        assertThat(item.get("ses_message_ids").ss()).containsExactly("ses-msg-9");
+        assertThat(item.get("sk").s())
+                .isEqualTo(Keys.alertSk(
+                        alert.barTime().toString(), "strategy", alert.strategyName(), sentAt.toEpochMilli()));
+    }
+
+    @Test
     void recordSentAlert_is_append_only_distinct_sent_at_ms_yields_distinct_items() {
         PatternEvent event = sampleEvent();
         repo.recordSentAlert(

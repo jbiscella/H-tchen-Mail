@@ -36,8 +36,11 @@ public class RetryPollerHandler extends MicronautRequestHandler<Map<String, Obje
     @Override
     public Map<String, Object> execute(Map<String, Object> input) {
         LOG.info("build_info run=retry-poller build={}", buildInfo.label());
-        PollResult result = pollerService.processBatch();
-        PollResult strategyResult = strategyPollerService.processBatch();
+        // Each queue runs in its own guarded block so a runtime failure draining
+        // one (e.g. a corrupt pending item) does not abort the run before the
+        // other is serviced (CLAUDE.md §9 Component 1c "Handler isolation").
+        PollResult result = runGuarded("legacy", pollerService::processBatch);
+        PollResult strategyResult = runGuarded("strategy", strategyPollerService::processBatch);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("processed", result.processed());
         m.put("sent_full", result.sentFull());
@@ -48,5 +51,19 @@ public class RetryPollerHandler extends MicronautRequestHandler<Map<String, Obje
         m.put("strategy_sent_degraded", strategyResult.sentDegraded());
         m.put("strategy_requeued", strategyResult.requeued());
         return m;
+    }
+
+    private static PollResult runGuarded(String queue, java.util.function.Supplier<PollResult> batch) {
+        try {
+            return batch.get();
+        } catch (RuntimeException e) {
+            LOG.error(
+                    "retry_poller_queue_failed queue={} ex_class={} message={}",
+                    queue,
+                    e.getClass().getName(),
+                    e.getMessage(),
+                    e);
+            return PollResult.empty();
+        }
     }
 }

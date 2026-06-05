@@ -1,6 +1,5 @@
 package com.heikinashi.monitoring.infrastructure.dynamodb;
 
-import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
@@ -8,7 +7,6 @@ import jakarta.inject.Singleton;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -136,12 +134,6 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
         item.put("entity", s(Keys.ENTITY_STRATEGY_PENDING_ALERT));
         item.put("event_uid", s(pa.eventUid()));
         item.put("alert", s(StrategyAlertJson.toJson(pa.alert())));
-        pa.chart().ifPresent(c -> {
-            item.put("chart_png", s(Base64.getEncoder().encodeToString(c.bytes())));
-            item.put("chart_content_type", s(c.contentType()));
-            item.put("chart_width", n(Integer.toString(c.widthPx())));
-            item.put("chart_height", n(Integer.toString(c.heightPx())));
-        });
         item.put("retry_count", n(Integer.toString(pa.retryCount())));
         item.put("retry_at", s(pa.retryAt().toString()));
         item.put("last_error", AttributeValue.fromM(buildLastErrorMap(pa.lastError())));
@@ -169,25 +161,9 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
                 errMap.get("message").s(),
                 Instant.parse(errMap.get("ts").s()),
                 Optional.ofNullable(errMap.get("component")).map(AttributeValue::s));
-        Optional<ChartImage> chart = Optional.empty();
-        AttributeValue chartAv = item.get("chart_png");
-        if (chartAv != null) {
-            byte[] bytes = Base64.getDecoder().decode(chartAv.s());
-            String ct = Optional.ofNullable(item.get("chart_content_type"))
-                    .map(AttributeValue::s)
-                    .orElse("image/png");
-            int w = Optional.ofNullable(item.get("chart_width"))
-                    .map(av -> Integer.parseInt(av.n()))
-                    .orElse(0);
-            int h = Optional.ofNullable(item.get("chart_height"))
-                    .map(av -> Integer.parseInt(av.n()))
-                    .orElse(0);
-            chart = Optional.of(new ChartImage(bytes, ct, w, h));
-        }
         return new PendingStrategyAlert(
                 item.get("event_uid").s(),
                 StrategyAlertJson.fromJson(item.get("alert").s()),
-                chart,
                 Integer.parseInt(item.get("retry_count").n()),
                 Instant.parse(item.get("retry_at").s()),
                 err,

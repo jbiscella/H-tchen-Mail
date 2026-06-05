@@ -68,6 +68,18 @@ class DynamoDbHaRepositoryIT extends LocalStackITBase {
     }
 
     @Test
+    void findLastN_returns_up_to_n_bars_inclusive_of_the_boundary_ascending() {
+        for (int day = 1; day <= 6; day++) {
+            repo.putBar(ha(Instant.parse("2026-05-0" + day + "T00:00:00Z"), "100", "101"), Optional.empty());
+        }
+        List<HABar> last3 = repo.findLastN(INSTRUMENT_ID, Timeframe.D1, Instant.parse("2026-05-06T00:00:00Z"), 3);
+
+        assertThat(last3).hasSize(3);
+        assertThat(last3.get(0).barTime()).isEqualTo(Instant.parse("2026-05-04T00:00:00Z"));
+        assertThat(last3.get(2).barTime()).isEqualTo(Instant.parse("2026-05-06T00:00:00Z")); // inclusive boundary
+    }
+
+    @Test
     void snapshotReplace_truncates_and_writes_new_bar_atomically() {
         for (int day = 1; day <= 4; day++) {
             repo.putBar(ha(Instant.parse("2026-05-0" + day + "T00:00:00Z"), "100", "101"), Optional.empty());

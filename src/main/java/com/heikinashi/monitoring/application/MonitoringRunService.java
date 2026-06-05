@@ -63,8 +63,12 @@ public class MonitoringRunService {
     private final Clock clock;
     private final Duration softTimeout;
 
-    /** HA lookback window read for the strategy alert chart (overlays + candles). */
-    private static final int STRATEGY_CHART_LOOKBACK_BARS = 120;
+    // HA lookback window read for the strategy alert chart (overlays + candles).
+    // Matches the strategy evaluation lookback so any indicator a scenario
+    // references (warm enough to fire the alert) has enough bars to render —
+    // otherwise StrategyChartSpec.placeIndicators would drop the very overlay
+    // that triggered the alert (CLAUDE.md §9 Component 1c).
+    private static final int STRATEGY_CHART_LOOKBACK_BARS = 300;
 
     public MonitoringRunService(
             InstrumentRepository instruments,
@@ -148,10 +152,10 @@ public class MonitoringRunService {
                         if (strategyAlert.isPresent()) {
                             summary = summary.addEvents(1);
                             realEventForTf.merge(entry.getKey(), true, Boolean::logicalOr);
-                            List<HABar> chartBars = haRepository.findLastNBefore(
+                            List<HABar> chartBars = haRepository.findLastN(
                                     inst.id(),
                                     entry.getKey(),
-                                    strategyAlert.get().barTime().plusNanos(1),
+                                    strategyAlert.get().barTime(),
                                     STRATEGY_CHART_LOOKBACK_BARS);
                             summary = summary.withDispatch(
                                     strategyDispatchService.dispatch(strategyAlert.get(), strategy.get(), chartBars));
