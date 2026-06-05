@@ -73,13 +73,13 @@ public class PatternDetectionService {
         if (newHaBars.isEmpty()) {
             return List.of();
         }
-        // NOTE: Block 15 envisages a strategy *superseding* the three fixed patterns
-        // for its instrument. That coupling is deliberately NOT applied here yet:
-        // the strategy path (detectStrategyAlert) is not dispatched anywhere, so
-        // suppressing the legacy alerts on strategy presence would mean an instrument
-        // with a strategy emits no alerts at all once a real StrategyRepository
-        // replaces the NoOp. Legacy detection therefore runs regardless of strategy
-        // presence until strategy dispatch is wired (PR #79 review P1).
+        // Block 15 — a strategy supersedes the three fixed patterns for its
+        // instrument: once an instrument is monitored by an imported strategy it
+        // no longer emits the legacy color_change / strong_candle / doji alerts;
+        // only the strategy's scenarios can raise alerts (via detectStrategyAlert).
+        if (strategies.findByInstrumentId(instrument.id()).isPresent()) {
+            return List.of();
+        }
         InstrumentConfig cfg = instruments
                 .findConfigById(instrument.id())
                 .orElseThrow(() -> new InstrumentNotFoundException(instrument.id()));

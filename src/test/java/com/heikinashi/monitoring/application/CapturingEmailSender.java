@@ -56,11 +56,57 @@ public final class CapturingEmailSender implements EmailSender {
         return record(event, enrichment, true, recipients);
     }
 
+    @Override
+    public List<DeliveryResult> sendFull(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            ChartImage chart,
+            AiAnalysis analysis,
+            Set<String> recipients) {
+        if (unavailable) {
+            throw new DependencyUnavailableException("ses", null);
+        }
+        List<DeliveryResult> deliveries = buildDeliveries(recipients);
+        sends.add(new Sent(
+                strategyUid(alert), AlertEnrichment.FULL, false, Set.copyOf(recipients), List.copyOf(deliveries)));
+        return deliveries;
+    }
+
+    @Override
+    public List<DeliveryResult> sendDegraded(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            Optional<ChartImage> chart,
+            Optional<AiAnalysis> analysis,
+            Set<String> recipients,
+            AlertEnrichment enrichment) {
+        if (unavailable) {
+            throw new DependencyUnavailableException("ses", null);
+        }
+        List<DeliveryResult> deliveries = buildDeliveries(recipients);
+        sends.add(new Sent(strategyUid(alert), enrichment, true, Set.copyOf(recipients), List.copyOf(deliveries)));
+        return deliveries;
+    }
+
+    private static String strategyUid(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+        return alert.instrumentId() + "_" + alert.timeframe().wire() + "_" + alert.barTime() + "_"
+                + alert.strategyName();
+    }
+
     private List<DeliveryResult> record(
             PatternEvent event, AlertEnrichment enrichment, boolean degraded, Set<String> recipients) {
         if (unavailable) {
             throw new DependencyUnavailableException("ses", null);
         }
+        List<DeliveryResult> deliveries = buildDeliveries(recipients);
+        sends.add(new Sent(
+                com.heikinashi.monitoring.domain.PendingAlert.uidOf(event),
+                enrichment,
+                degraded,
+                Set.copyOf(recipients),
+                List.copyOf(deliveries)));
+        return deliveries;
+    }
+
+    private List<DeliveryResult> buildDeliveries(Set<String> recipients) {
         List<DeliveryResult> deliveries = new ArrayList<>(recipients.size());
         for (String r : recipients) {
             if (rejectedRecipients.contains(r)) {
@@ -70,12 +116,6 @@ public final class CapturingEmailSender implements EmailSender {
                         new DeliveryResult(r, true, Optional.of("ses-msg-" + (++messageIdCounter)), Optional.empty()));
             }
         }
-        sends.add(new Sent(
-                com.heikinashi.monitoring.domain.PendingAlert.uidOf(event),
-                enrichment,
-                degraded,
-                Set.copyOf(recipients),
-                List.copyOf(deliveries)));
         return deliveries;
     }
 }
