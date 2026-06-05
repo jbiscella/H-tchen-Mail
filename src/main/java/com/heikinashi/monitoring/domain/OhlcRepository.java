@@ -25,6 +25,16 @@ public interface OhlcRepository {
     List<OHLCBar> findRange(String instrumentId, Timeframe tf, Instant from, Instant toInclusive);
 
     /**
+     * The most recent {@code n} OHLC bars with {@code bar_time <= toInclusive},
+     * sorted ascending by bar_time. Bar-counted, not calendar-bounded: a long
+     * strategy indicator (e.g. {@code rsi(250)}) gets its full warmup window
+     * regardless of market-closure gaps (weekends, holidays, missing data), which
+     * a {@code period_seconds(tf)} calendar window would shrink. Returns fewer
+     * than {@code n} when less history exists; empty when {@code n <= 0}.
+     */
+    List<OHLCBar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n);
+
+    /**
      * Idempotent put: writes the bar with a conditional non-existence check on
      * the primary key. Returns {@code true} if the bar was inserted, {@code false}
      * if a bar with the same {@code (instrument_id, tf, bar_time)} already

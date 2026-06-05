@@ -36,7 +36,12 @@ public class HeerwischStrategyChartRenderer implements StrategyChartRenderer {
             ChartSpec spec = StrategyChartSpec.build(strategy, alert, bars, config);
             org.hatrack.heerwisch.api.spec.ChartImage image = renderer.render(spec);
             return new ChartImage(image.bytes(), image.contentType(), image.widthPx(), image.heightPx());
-        } catch (org.hatrack.heerwisch.api.error.ChartRenderException e) {
+        } catch (org.hatrack.heerwisch.api.error.ChartRenderException | RuntimeException e) {
+            // Wrap ANY render fault (heerwisch's checked ChartRenderException, or an
+            // unchecked heerwisch/JFreeChart RuntimeException) as the domain
+            // ChartRenderException, so the dispatch chart-stage handler enqueues /
+            // degrades it instead of the fault escaping and failing the whole
+            // instrument run. Same contract as the legacy HeerwischChartRenderer.
             throw new ChartRenderException(e);
         }
     }

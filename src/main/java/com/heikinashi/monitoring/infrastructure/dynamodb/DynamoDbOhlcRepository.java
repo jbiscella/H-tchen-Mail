@@ -56,6 +56,31 @@ public class DynamoDbOhlcRepository implements OhlcRepository {
         return findBetween(instrumentId, tf, from.toString(), toInclusive.toString());
     }
 
+    @Override
+    public List<OHLCBar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n) {
+        if (n <= 0) {
+            return List.of();
+        }
+        // Single descending Query bounded above by toInclusive (BETWEEN is inclusive),
+        // limited to n, then reversed to ascending. Bar-counted, gap-agnostic.
+        QueryResponse resp = client.query(QueryRequest.builder()
+                .tableName(tableConfig.getTableName())
+                .keyConditionExpression("pk = :pk AND sk BETWEEN :skLow AND :skHigh")
+                .expressionAttributeValues(Map.of(
+                        ":pk", s(Keys.instrumentPk(instrumentId)),
+                        ":skLow", s("OHLC#" + tf.wire() + "#"),
+                        ":skHigh", s("OHLC#" + tf.wire() + "#" + toInclusive.toString())))
+                .scanIndexForward(false)
+                .limit(n)
+                .build());
+        List<OHLCBar> out = new ArrayList<>(resp.items().size());
+        for (Map<String, AttributeValue> item : resp.items()) {
+            out.add(toBar(item));
+        }
+        java.util.Collections.reverse(out);
+        return out;
+    }
+
     private List<OHLCBar> findBetween(String instrumentId, Timeframe tf, String fromIso, String toIso) {
         List<OHLCBar> out = new ArrayList<>();
         Map<String, AttributeValue> startKey = null;

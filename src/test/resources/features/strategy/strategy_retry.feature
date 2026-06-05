@@ -43,3 +43,9 @@ Feature: SI-3c.3 — Strategy alert retry
     When the strategy retry poller runs
     Then no strategy email is sent
     And the strategy pending alert retry_count is 1
+
+  Scenario: All recipients rejected on the final attempt drops the poison item
+    Given a strategy pending alert is queued with retry_count 2 and a stored chart due now
+    And the email sender will reject recipient "alice@example.com"
+    When the strategy retry poller runs
+    Then the strategy pending alert is deleted
