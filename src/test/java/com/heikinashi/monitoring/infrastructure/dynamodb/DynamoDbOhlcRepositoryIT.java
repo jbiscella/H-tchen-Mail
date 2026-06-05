@@ -78,6 +78,30 @@ class DynamoDbOhlcRepositoryIT extends LocalStackITBase {
     }
 
     @Test
+    void findLastN_returns_the_last_n_bars_by_count_inclusive_and_ascending() {
+        repo.putBar(bar(Instant.parse("2026-05-03T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-04T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-05T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-06T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-07T00:00:00Z")), Optional.empty());
+
+        List<OHLCBar> last3 = repo.findLastN(INSTRUMENT_ID, Timeframe.D1, Instant.parse("2026-05-06T00:00:00Z"), 3);
+
+        assertThat(last3).hasSize(3);
+        assertThat(last3.get(0).barTime()).isEqualTo(Instant.parse("2026-05-04T00:00:00Z"));
+        assertThat(last3.get(2).barTime()).isEqualTo(Instant.parse("2026-05-06T00:00:00Z")); // inclusive boundary
+    }
+
+    @Test
+    void findLastN_caps_at_available_history() {
+        repo.putBar(bar(Instant.parse("2026-05-05T00:00:00Z")), Optional.empty());
+        repo.putBar(bar(Instant.parse("2026-05-06T00:00:00Z")), Optional.empty());
+
+        assertThat(repo.findLastN(INSTRUMENT_ID, Timeframe.D1, Instant.parse("2026-05-06T00:00:00Z"), 300))
+                .hasSize(2);
+    }
+
+    @Test
     void snapshotReplace_truncates_existing_bars_and_writes_new_one_atomically() {
         for (int i = 0; i < 5; i++) {
             repo.putBar(bar(Instant.parse("2026-05-0" + (i + 1) + "T00:00:00Z")), Optional.empty());

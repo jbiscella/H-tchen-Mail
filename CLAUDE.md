@@ -1454,8 +1454,16 @@ stored alert, and re-sends.
 | On success                                      | DeleteItem `STRATEGY_PENDING_ALERT`                                               |
 | On failure with `retry_count + 1 < 3`           | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated          |
 | On failure with `retry_count + 1 == 3`          | Send **degraded** email (stored chart if any; AI section empty if AI still fails); DeleteItem |
+| All recipients rejected on the **final** attempt | DeleteItem and give up — an invalid recipient list is permanent, so the poison item is dropped (logged) rather than bumped forever. SES being *down* (a `DependencyUnavailableException`) is transient and still bumps. |
 | No recipients at poll time                       | DeleteItem and skip                                                              |
 | Idempotency / races                             | enqueue `attribute_not_exists(pk)`; bump conditional on `retry_count` — same as legacy |
+
+The chart renderer (`HeerwischStrategyChartRenderer`) wraps **any** runtime failure
+(heerwisch/JFreeChart `RuntimeException`, not only the driver's checked
+`ChartRenderException`) as the domain `ChartRenderException`, so a render fault is
+caught by the dispatch's chart-stage handler and enqueued/degraded rather than
+escaping and failing the whole instrument run — same contract as the legacy
+`HeerwischChartRenderer`.
 
 The `retry-poller` Lambda (§10) runs **both** queues each tick: the legacy
 `PENDING_ALERT` batch then the `STRATEGY_PENDING_ALERT` batch.
@@ -2662,38 +2670,24 @@ Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), 
 Single place collecting everything intentionally postponed. Each entry: what it
 is, why it's deferred, and when/how to address it.
 
-1. **Strategy dispatch path is dormant.**
-   *What*: `detectStrategyAlert` is wired for *evaluation* (it imports a strategy,
-   runs dsl-eval over the OHLC series, and produces a `StrategyAlert`), but nothing
-   dispatches strategy alerts to email, and `StrategyRepository` is the `NoOp`
-   implementation, so no instrument can actually hold a strategy. The whole strategy
-   path is therefore unreachable in production today.
-   *Why deferred*: the strategy JSON format isn't proven against real data yet, and
-   the "one email, N lines" dispatch wiring was scoped out.
-   *Safety taken*: the Block 15 "a strategy supersedes the fixed patterns on strategy
-   presence" coupling has been **neutralized** — `detectPatterns` no longer returns
-   empty when a strategy exists — so flipping the repo from `NoOp` to a real one later
-   cannot silently mute an instrument (legacy suppressed + strategy alerts never sent).
-   *To address*: wire `detectStrategyAlert` into the dispatch/email path (subject +
-   `StrategyAlertText` body via the existing `EmailSender`) and restore the supersede
-   semantics, once the JSON format is proven and a real `StrategyRepository` exists.
+1. **Strategy dispatch path** — RESOLVED (PR #80, SI-1..SI-3c.3).
+   `detectStrategyAlert` is now wired into `MonitoringRunService` → the dedicated
+   `StrategyAlertDispatchService` (chart → AI → email, retry via SI-3c.3), the
+   `NoOp` repository is replaced by `DynamoDbStrategyRepository` (a real `STRATEGY`
+   item), and the Block 15 supersede semantics are restored (SI-3b: `detectPatterns`
+   returns empty when a strategy exists, so an instrument is never both suppressed
+   AND undispatched).
 
-2. **Strategy lookback uses calendar seconds, not bar count** (PR #79 review #5).
-   *What*: `PatternDetectionService.detectStrategyAlert` sizes its OHLC read by
-   subtracting `STRATEGY_LOOKBACK_BARS × period_seconds(tf)` (wall-clock seconds)
-   rather than requesting a bar count.
-   *Why deferred*: inert while the dispatch path is dormant (item 1) — the path is
-   unreachable, so the window never actually drives an alert; and it must be tested
-   against real bars, which aren't available without the live path.
-   *Why it's a bug when live*: market gaps (weekends, holidays, missing data) make a
-   calendar window yield **fewer bars than required**, so an indicator computes on a
-   short window and diverges from the backtest — a silent parity break.
-   *To fix at wiring time*: the lookback must request a **bar count** equal to the
-   MAX warmup required across all conditions of all scenarios (e.g. `sma(200)` needs
-   200, `rsi(14)` needs 14 → use 200). This is the runtime twin of the import-time
-   `IndicatorWarmupException` check that already exists. Verified reference: wichtelm
-   windows by bar count (`barsStrictlyBefore` / warmup-by-bars), so bar-count is the
-   parity-correct approach. The code carries a `TODO(PR #79 review #5)` at the spot.
+2. **Strategy lookback by bar count, not calendar seconds** — RESOLVED (PR #79
+   review #5 / PR #80 review).
+   `PatternDetectionService.detectStrategyAlert` reads the last `STRATEGY_LOOKBACK_BARS`
+   persisted OHLC bars **by count** (`OhlcRepository.findLastN(instrumentId, tf,
+   latest, n)`, inclusive of the latest bar), not a `period_seconds(tf)` calendar
+   window. Bar-count is the parity-correct approach (the runtime twin of the
+   import-time `IndicatorWarmupException` check): market gaps (weekends, holidays,
+   missing data) no longer shrink the warmup window, so a long indicator such as
+   `rsi(250)` keeps alerting as long as enough bars are persisted. Verified reference:
+   wichtelm windows by bar count (`barsStrictlyBefore` / warmup-by-bars).
 
 3. **Stateless-parametric evaluation via a future mail "commit" button.**
    *What*: a user-supplied entry price would let `entry_price`-relative conditions
@@ -2715,8 +2709,7 @@ is, why it's deferred, and when/how to address it.
 
 ### From code (TODO/FIXME)
 
-- `src/main/java/com/heikinashi/monitoring/application/PatternDetectionService.java:214`
-  — `TODO(PR #79 review #5)` on the calendar-seconds lookback (item 2 above).
+- (none currently)
 
 ---
 

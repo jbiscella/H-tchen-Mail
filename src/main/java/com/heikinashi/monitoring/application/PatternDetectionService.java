@@ -206,27 +206,14 @@ public class PatternDetectionService {
         sortedNew.sort(Comparator.comparing(HABar::barTime));
         Instant latest = sortedNew.get(sortedNew.size() - 1).barTime();
 
-        // Read a generous raw-OHLC window (ending at the latest ingested bar) so the
-        // strategy's dsl-eval indicators have room to warm up. The DSL strings don't
-        // expose their periods here, so we use a fixed window rather than a computed
-        // minimum.
-        //
-        // TODO(PR #79 review #5): this subtracts calendar seconds, so for D1 it yields
-        // ~200 trading bars over ~300 calendar days and can starve a long indicator
-        // (e.g. rsi(250)) of warmup. When the strategy path is actually wired/dispatched,
-        // switch to a bar-counted read (last N persisted bars, as wichtelm does via
-        // barsStrictlyBefore) and validate against real bars. Inert today: this path is
-        // unreachable while the StrategyRepository is the NoOp.
-        Instant from = latest.minusSeconds((long) STRATEGY_LOOKBACK_BARS * periodSeconds(tf));
-        List<OHLCBar> ohlcSeries = ohlc.findRange(instrument.id(), tf, from, latest);
+        // Read the last STRATEGY_LOOKBACK_BARS persisted OHLC bars BY COUNT (ending at
+        // the latest ingested bar) so the strategy's dsl-eval indicators have room to
+        // warm up. Bar-counted — not a calendar window — so market-closure gaps don't
+        // shrink the warmup window and starve a long indicator such as rsi(250). The
+        // DSL strings don't expose their periods here, so we use a fixed generous count
+        // rather than a computed per-strategy minimum.
+        List<OHLCBar> ohlcSeries = ohlc.findLastN(instrument.id(), tf, latest, STRATEGY_LOOKBACK_BARS);
         return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
-    }
-
-    private static long periodSeconds(Timeframe tf) {
-        return switch (tf) {
-            case D1 -> 86_400L;
-            case W1 -> 604_800L;
-        };
     }
 
     private PatternEvent buildEvent(

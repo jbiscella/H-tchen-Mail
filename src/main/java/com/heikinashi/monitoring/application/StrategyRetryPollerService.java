@@ -142,6 +142,22 @@ public class StrategyRetryPollerService {
             }
         }
         if (delivered.isEmpty()) {
+            // SES responded but rejected every recipient. SES being DOWN is the
+            // transient case handled above (exception -> bump). Here the rejection is
+            // a permanent, invalid recipient list: on the final attempt, drop the
+            // poison item instead of bumping it forever (CLAUDE.md §9 Component 1c).
+            // Keyed on lastAttempt, not `degraded` — a fully-enriched send on the
+            // final attempt can still have every recipient rejected.
+            boolean lastAttempt = pending.retryCount() + 1 >= maxAttempts;
+            if (lastAttempt) {
+                pendingAlerts.delete(pending.eventUid());
+                LOG.error(
+                        "strategy_retry_dropped_all_rejected instrument_id={} bar_time={} retry_count={}",
+                        alert.instrumentId(),
+                        alert.barTime(),
+                        pending.retryCount());
+                return result; // dropped (not sent, not requeued); already counted as processed
+            }
             return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
         }
 
