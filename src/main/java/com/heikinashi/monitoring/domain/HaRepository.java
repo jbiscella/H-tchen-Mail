@@ -18,6 +18,16 @@ public interface HaRepository {
     List<HABar> findLastNBefore(String instrumentId, Timeframe tf, Instant before, int n);
 
     /**
+     * The most recent {@code n} HA bars with {@code barTime <= toInclusive}, in
+     * ascending bar_time order. Inclusive twin of {@link #findLastNBefore}: used
+     * by the strategy chart path (first attempt and retry re-render) to load a
+     * bar-counted window ending at the alert bar, so a referenced indicator has
+     * enough bars to render regardless of market-closure gaps. Empty when
+     * {@code n <= 0}.
+     */
+    List<HABar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n);
+
+    /**
      * Put (overwrite). Same OHLC → same HA, so writing again is a no-op
      * functionally. Optional epoch-seconds TTL.
      */

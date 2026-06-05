@@ -1,8 +1,11 @@
 package com.heikinashi.monitoring.application;
 
+import com.heikinashi.monitoring.application.config.AlertsConfig;
 import com.heikinashi.monitoring.application.config.RetryConfig;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiAnalyst;
+import com.heikinashi.monitoring.domain.AlertAuditRepository;
+import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.EmailSender;
@@ -23,6 +26,8 @@ import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -52,8 +57,10 @@ public class StrategyAlertDispatchService {
     private final AiAnalyst aiAnalyst;
     private final EmailSender emailSender;
     private final PendingStrategyAlertRepository pendingAlerts;
+    private final AlertAuditRepository auditRepo;
     private final Clock clock;
     private final Duration retryDelay;
+    private final boolean auditEnabled;
 
     public StrategyAlertDispatchService(
             InstrumentRepository instruments,
@@ -61,15 +68,19 @@ public class StrategyAlertDispatchService {
             AiAnalyst aiAnalyst,
             EmailSender emailSender,
             PendingStrategyAlertRepository pendingAlerts,
+            AlertAuditRepository auditRepo,
             Clock clock,
-            RetryConfig retryConfig) {
+            RetryConfig retryConfig,
+            AlertsConfig alertsConfig) {
         this.instruments = instruments;
         this.chartRenderer = chartRenderer;
         this.aiAnalyst = aiAnalyst;
         this.emailSender = emailSender;
         this.pendingAlerts = pendingAlerts;
+        this.auditRepo = auditRepo;
         this.clock = clock;
         this.retryDelay = retryConfig.delay();
+        this.auditEnabled = alertsConfig.isAuditEnabled();
     }
 
     public DispatchSummary dispatch(StrategyAlert alert, Strategy strategy, List<HABar> bars) {
@@ -91,41 +102,47 @@ public class StrategyAlertDispatchService {
         try {
             chart = chartRenderer.render(alert, strategy, bars);
         } catch (ChartRenderException | DependencyUnavailableException e) {
-            // The chart cannot be re-rendered in the poller (no Strategy + bars
-            // there), so enqueue with no stored chart; the poller will retry
-            // AI + email and ultimately send a chart-degraded email.
-            return enqueue(alert, Optional.empty(), "chart", e);
+            return enqueue(alert, "chart", e);
         }
 
         AiAnalysis analysis;
         try {
             analysis = aiAnalyst.analyze(alert);
         } catch (LLMException | DependencyUnavailableException e) {
-            return enqueue(alert, Optional.of(chart), "ai", e);
+            return enqueue(alert, "ai", e);
         }
 
         List<EmailSender.DeliveryResult> deliveries;
         try {
             deliveries = emailSender.sendFull(alert, chart, analysis, recipients);
         } catch (DependencyUnavailableException e) {
-            return enqueue(alert, Optional.of(chart), "email", e);
+            return enqueue(alert, "email", e);
         }
 
-        boolean anyDelivered = deliveries.stream().anyMatch(EmailSender.DeliveryResult::delivered);
-        if (!anyDelivered) {
-            return enqueue(
-                    alert, Optional.of(chart), "email", new DependencyUnavailableException("ses-all-rejected", null));
+        Set<String> delivered = new LinkedHashSet<>();
+        List<String> messageIds = new ArrayList<>();
+        for (EmailSender.DeliveryResult r : deliveries) {
+            if (r.delivered()) {
+                delivered.add(r.recipient());
+                r.sesMessageId().ifPresent(messageIds::add);
+            }
+        }
+        if (delivered.isEmpty()) {
+            return enqueue(alert, "email", new DependencyUnavailableException("ses-all-rejected", null));
+        }
+        if (auditEnabled) {
+            auditRepo.recordSentStrategyAlert(alert, AlertEnrichment.FULL, delivered, messageIds, clock.instant());
         }
         return DispatchSummary.empty().plusSent();
     }
 
-    private DispatchSummary enqueue(
-            StrategyAlert alert, Optional<ChartImage> chart, String component, RuntimeException cause) {
+    private DispatchSummary enqueue(StrategyAlert alert, String component, RuntimeException cause) {
+        // No chart is stored: the retry poller re-renders from the persisted
+        // Strategy + bars (CLAUDE.md §9 Component 1c SI-3c.3).
         Instant now = clock.instant();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),
                 alert,
-                chart,
                 0,
                 now.plus(retryDelay),
                 new PendingAlert.LastError(
@@ -138,11 +155,10 @@ public class StrategyAlertDispatchService {
                 now);
         pendingAlerts.enqueue(pending);
         LOG.error(
-                "strategy_dispatch_failed instrument_id={} bar_time={} component={} chart_stored={} code={} retry_at={}",
+                "strategy_dispatch_failed instrument_id={} bar_time={} component={} code={} retry_at={}",
                 alert.instrumentId(),
                 alert.barTime(),
                 component,
-                chart.isPresent(),
                 pending.lastError().code(),
                 pending.retryAt(),
                 cause);

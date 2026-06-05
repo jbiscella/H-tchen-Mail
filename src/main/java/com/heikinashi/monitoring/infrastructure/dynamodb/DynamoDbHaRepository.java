@@ -68,6 +68,31 @@ public class DynamoDbHaRepository implements HaRepository {
     }
 
     @Override
+    public List<HABar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n) {
+        if (n <= 0) {
+            return List.of();
+        }
+        // Inclusive upper bound: BETWEEN is inclusive and the sk encodes the full
+        // ISO bar_time, so the bar at exactly toInclusive is included.
+        QueryResponse resp = client.query(QueryRequest.builder()
+                .tableName(tableConfig.getTableName())
+                .keyConditionExpression("pk = :pk AND sk BETWEEN :skLow AND :skHigh")
+                .expressionAttributeValues(Map.of(
+                        ":pk", s(Keys.instrumentPk(instrumentId)),
+                        ":skLow", s("HA#" + tf.wire() + "#"),
+                        ":skHigh", s("HA#" + tf.wire() + "#" + toInclusive.toString())))
+                .scanIndexForward(false)
+                .limit(n)
+                .build());
+        List<HABar> out = new ArrayList<>(resp.items().size());
+        for (Map<String, AttributeValue> item : resp.items()) {
+            out.add(toBar(item));
+        }
+        java.util.Collections.reverse(out);
+        return out;
+    }
+
+    @Override
     public Optional<HABar> findLatestBefore(String instrumentId, Timeframe tf, Instant before) {
         QueryResponse resp = client.query(QueryRequest.builder()
                 .tableName(tableConfig.getTableName())

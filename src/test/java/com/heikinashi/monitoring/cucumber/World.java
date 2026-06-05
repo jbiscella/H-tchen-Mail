@@ -168,9 +168,27 @@ public final class World {
                 retryConfig,
                 alertsConfig);
         strategyAlertDispatchService = new StrategyAlertDispatchService(
-                repository, strategyChartRenderer, aiAnalyst, emailSender, pendingStrategyAlerts, clock, retryConfig);
+                repository,
+                strategyChartRenderer,
+                aiAnalyst,
+                emailSender,
+                pendingStrategyAlerts,
+                auditRepo,
+                clock,
+                retryConfig,
+                alertsConfig);
         strategyRetryPollerService = new StrategyRetryPollerService(
-                repository, aiAnalyst, emailSender, pendingStrategyAlerts, clock, retryConfig);
+                repository,
+                strategyRepository,
+                strategyChartRenderer,
+                haRepository,
+                aiAnalyst,
+                emailSender,
+                pendingStrategyAlerts,
+                auditRepo,
+                clock,
+                retryConfig,
+                alertsConfig);
         retryPollerService = new RetryPollerService(
                 repository,
                 chartRenderer,

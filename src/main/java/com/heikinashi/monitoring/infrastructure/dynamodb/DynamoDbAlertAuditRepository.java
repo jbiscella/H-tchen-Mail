@@ -3,6 +3,7 @@ package com.heikinashi.monitoring.infrastructure.dynamodb;
 import com.heikinashi.monitoring.domain.AlertAuditRepository;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -53,6 +54,53 @@ public class DynamoDbAlertAuditRepository implements AlertAuditRepository {
                 .tableName(tableConfig.getTableName())
                 .item(buildItem(event, enrichment, deliveredRecipients, sesMessageIds, sentAt))
                 .build());
+    }
+
+    @Override
+    public void recordSentStrategyAlert(
+            StrategyAlert alert,
+            AlertEnrichment enrichment,
+            Set<String> deliveredRecipients,
+            List<String> sesMessageIds,
+            Instant sentAt) {
+        client.putItem(PutItemRequest.builder()
+                .tableName(tableConfig.getTableName())
+                .item(buildStrategyItem(alert, enrichment, deliveredRecipients, sesMessageIds, sentAt))
+                .build());
+    }
+
+    private Map<String, AttributeValue> buildStrategyItem(
+            StrategyAlert alert,
+            AlertEnrichment enrichment,
+            Set<String> deliveredRecipients,
+            List<String> sesMessageIds,
+            Instant sentAt) {
+        // Reuses the legacy ALERT shape with pattern="strategy", subtype=<strategy name>
+        // so strategy sends land in the same compliance history (CLAUDE.md §9 SI-3c.3).
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", s(Keys.instrumentPk(alert.instrumentId())));
+        item.put(
+                "sk",
+                s(Keys.alertSk(alert.barTime().toString(), "strategy", alert.strategyName(), sentAt.toEpochMilli())));
+        item.put("entity", s(Keys.ENTITY_ALERT));
+        item.put("instrument_id", s(alert.instrumentId()));
+        item.put("ticker", s(alert.ticker()));
+        item.put("exchange", s(alert.exchange()));
+        item.put("timeframe", s(alert.timeframe().wire()));
+        item.put("bar_time", s(alert.barTime().toString()));
+        item.put("pattern", s("strategy"));
+        item.put("subtype", s(alert.strategyName()));
+        item.put("enrichment", s(enrichment.wire()));
+        item.put("sent_at", s(sentAt.toString()));
+        if (!deliveredRecipients.isEmpty()) {
+            item.put("recipients", AttributeValue.fromSs(new ArrayList<>(deliveredRecipients)));
+        }
+        if (!sesMessageIds.isEmpty()) {
+            item.put("ses_message_ids", AttributeValue.fromSs(new ArrayList<>(sesMessageIds)));
+        }
+        long ttl = alert.barTime().plus(TTL_RETENTION_DAYS, ChronoUnit.DAYS).getEpochSecond();
+        item.put("ttl", n(Long.toString(ttl)));
+        return item;
     }
 
     private Map<String, AttributeValue> buildItem(

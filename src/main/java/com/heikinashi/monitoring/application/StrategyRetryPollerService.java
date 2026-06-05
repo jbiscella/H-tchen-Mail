@@ -1,24 +1,32 @@
 package com.heikinashi.monitoring.application;
 
+import com.heikinashi.monitoring.application.config.AlertsConfig;
 import com.heikinashi.monitoring.application.config.RetryConfig;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiAnalyst;
+import com.heikinashi.monitoring.domain.AlertAuditRepository;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.EmailSender;
+import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
 import com.heikinashi.monitoring.domain.PollResult;
+import com.heikinashi.monitoring.domain.StrategyChartRenderer;
+import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.domain.error.DependencyUnavailableException;
 import com.heikinashi.monitoring.domain.error.LLMException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -30,42 +38,62 @@ import org.slf4j.LoggerFactory;
  * SI-3c.3 — retry poller for strategy alerts (CLAUDE.md §9 Component 1c).
  *
  * <p>Mirrors {@link RetryPollerService} but over the {@code STRATEGY_PENDING_ALERT}
- * partition, with one twist: a strategy chart cannot be re-derived from the
- * alert, so the queued item carries the already-rendered chart bytes. Per due
- * item: <b>reuse</b> the stored chart (never re-render), re-run the AI analyst
- * from the stored alert, then send. On success delete; under the cap bump; at the
- * cap send a degraded email (stored chart if any, AI section empty if AI still
- * fails) and delete.
+ * partition. The queued item carries no chart: per due item the poller reloads the
+ * persisted {@link Strategy} + HA bars and <b>re-renders</b> the chart (falling
+ * back to chart-degraded if the strategy is gone or render still fails), re-runs
+ * the AI analyst from the stored alert, then sends. On success it records the audit
+ * item and deletes; under the cap it bumps; at the cap it sends a degraded email
+ * and deletes. All recipients rejected on the final attempt drops the poison item.
  */
 @Singleton
 public class StrategyRetryPollerService {
 
     private static final Logger LOG = LoggerFactory.getLogger(StrategyRetryPollerService.class);
 
+    // Chart window matches the strategy evaluation lookback so any indicator a
+    // scenario references (and that was warm enough to fire the alert) has enough
+    // bars to render (CLAUDE.md §9 Component 1c "Chart window").
+    private static final int CHART_LOOKBACK_BARS = 300;
+
     private final InstrumentRepository instruments;
+    private final com.heikinashi.monitoring.domain.strategy.StrategyRepository strategies;
+    private final StrategyChartRenderer chartRenderer;
+    private final HaRepository haRepository;
     private final AiAnalyst aiAnalyst;
     private final EmailSender emailSender;
     private final PendingStrategyAlertRepository pendingAlerts;
+    private final AlertAuditRepository auditRepo;
     private final Clock clock;
     private final Duration retryDelay;
     private final int maxAttempts;
     private final int batchLimit;
+    private final boolean auditEnabled;
 
     public StrategyRetryPollerService(
             InstrumentRepository instruments,
+            com.heikinashi.monitoring.domain.strategy.StrategyRepository strategies,
+            StrategyChartRenderer chartRenderer,
+            HaRepository haRepository,
             AiAnalyst aiAnalyst,
             EmailSender emailSender,
             PendingStrategyAlertRepository pendingAlerts,
+            AlertAuditRepository auditRepo,
             Clock clock,
-            RetryConfig retryConfig) {
+            RetryConfig retryConfig,
+            AlertsConfig alertsConfig) {
         this.instruments = instruments;
+        this.strategies = strategies;
+        this.chartRenderer = chartRenderer;
+        this.haRepository = haRepository;
         this.aiAnalyst = aiAnalyst;
         this.emailSender = emailSender;
         this.pendingAlerts = pendingAlerts;
+        this.auditRepo = auditRepo;
         this.clock = clock;
         this.retryDelay = retryConfig.delay();
         this.maxAttempts = retryConfig.getMaxAttempts();
         this.batchLimit = retryConfig.getBatchLimit();
+        this.auditEnabled = alertsConfig.isAuditEnabled();
     }
 
     public PollResult processBatch() {
@@ -92,8 +120,7 @@ public class StrategyRetryPollerService {
             return result;
         }
 
-        // The chart is reused as-is; the poller never re-renders (no Strategy + bars here).
-        Optional<ChartImage> chart = pending.chart();
+        Optional<ChartImage> chart = reRenderChart(alert);
 
         Optional<AiAnalysis> analysis;
         try {
@@ -113,6 +140,30 @@ public class StrategyRetryPollerService {
             return sendAndFinish(pending, alert, chart, analysis, recipients, true, result);
         }
         return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
+    }
+
+    /**
+     * Re-render the chart from the persisted strategy + bars. Empty when the
+     * strategy was deleted since detection, or the render still fails (the send is
+     * then chart-degraded).
+     */
+    private Optional<ChartImage> reRenderChart(StrategyAlert alert) {
+        Optional<Strategy> strategy = strategies.findByInstrumentId(alert.instrumentId());
+        if (strategy.isEmpty()) {
+            LOG.warn(
+                    "strategy_retry_no_strategy instrument_id={} bar_time={} (chart-degraded)",
+                    alert.instrumentId(),
+                    alert.barTime());
+            return Optional.empty();
+        }
+        List<HABar> bars =
+                haRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS);
+        try {
+            return Optional.of(chartRenderer.render(alert, strategy.get(), bars));
+        } catch (ChartRenderException | DependencyUnavailableException e) {
+            logRetryFailure(alert, "chart", e);
+            return Optional.empty();
+        }
     }
 
     private PollResult sendAndFinish(
@@ -136,9 +187,11 @@ public class StrategyRetryPollerService {
         }
 
         Set<String> delivered = new LinkedHashSet<>();
+        List<String> messageIds = new ArrayList<>();
         for (EmailSender.DeliveryResult r : deliveries) {
             if (r.delivered()) {
                 delivered.add(r.recipient());
+                r.sesMessageId().ifPresent(messageIds::add);
             }
         }
         if (delivered.isEmpty()) {
@@ -146,8 +199,6 @@ public class StrategyRetryPollerService {
             // transient case handled above (exception -> bump). Here the rejection is
             // a permanent, invalid recipient list: on the final attempt, drop the
             // poison item instead of bumping it forever (CLAUDE.md §9 Component 1c).
-            // Keyed on lastAttempt, not `degraded` — a fully-enriched send on the
-            // final attempt can still have every recipient rejected.
             boolean lastAttempt = pending.retryCount() + 1 >= maxAttempts;
             if (lastAttempt) {
                 pendingAlerts.delete(pending.eventUid());
@@ -161,6 +212,9 @@ public class StrategyRetryPollerService {
             return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
         }
 
+        if (auditEnabled) {
+            auditRepo.recordSentStrategyAlert(alert, enrichment, delivered, messageIds, clock.instant());
+        }
         pendingAlerts.delete(pending.eventUid());
         if (degraded) {
             LOG.info(

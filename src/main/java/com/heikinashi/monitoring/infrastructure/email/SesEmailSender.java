@@ -23,6 +23,7 @@ import org.apache.commons.mail2.jakarta.HtmlEmail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.SdkBytes;
+import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
 import software.amazon.awssdk.services.sesv2.model.EmailContent;
 import software.amazon.awssdk.services.sesv2.model.RawMessage;
@@ -208,6 +209,17 @@ public class SesEmailSender implements EmailSender {
                     code,
                     e.getMessage());
             return classify(code, recipient, e);
+        } catch (SdkException e) {
+            // Client-side SDK fault (timeout, network, credentials) — not a service
+            // SesV2Exception. Treat as transient so dispatch / retry poller enqueue
+            // or bump instead of letting it escape and fail the run.
+            LOG.warn(
+                    "ses_send_client_failure instrument_id={} recipient_masked={} ex_class={} message={}",
+                    instrumentId,
+                    mask(recipient),
+                    e.getClass().getName(),
+                    e.getMessage());
+            throw new DependencyUnavailableException("ses", e);
         }
     }
 
