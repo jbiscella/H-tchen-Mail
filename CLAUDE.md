@@ -98,7 +98,7 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 | `entity`    | String | discriminator                                          |
 | `gsi1Pk`    | String | GSI1 partition key (sparse, only on `INSTRUMENT`)      |
 | `gsi1Sk`    | String | GSI1 sort key                                          |
-| `gsi2Pk`    | String | GSI2 partition key (sparse, only on `PENDING_ALERT` due) |
+| `gsi2Pk`    | String | GSI2 partition key (sparse, on a due `PENDING_ALERT` (`RETRY_DUE`) or `STRATEGY_PENDING_ALERT` (`RETRY_DUE_STRATEGY`)) |
 | `gsi2Sk`    | String | GSI2 sort key (`retry_at` ISO 8601)                    |
 | `ttl`       | Number | UNIX epoch seconds; native DynamoDB TTL on this attribute |
 | ...         | ...    | entity-specific attributes                             |
@@ -128,7 +128,7 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 | ALERT (audit)  | `INSTRUMENT#<id>`                  | `ALERT#<bar_time_iso>#<pattern>#<subtype>#<sent_at_ms>`       | 365 days                              |
 
 Where `<tf>` is `1d` or `1w`. `<bar_time_iso>` and `<retry_at_iso>` are full ISO 8601 strings (`yyyy-MM-ddTHH:mm:ssZ`).
-`<event_uid>` is `<instrument_id>_<tf>_<bar_time>_<pattern>_<subtype>` (a deterministic concatenation suitable as a composite key).
+`<event_uid>` is `<instrument_id>_<tf>_<bar_time>_<pattern>_<subtype>` for a `PENDING_ALERT`; a `STRATEGY_PENDING_ALERT` instead uses `<instrument_id>_<tf>_<bar_time>_strategy` (no subtype, via `PendingStrategyAlert.uidOf`). Both are deterministic concatenations suitable as a composite key.
 
 ### INSTRUMENT attributes
 
@@ -181,14 +181,16 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 At most one STRATEGY item per instrument (single `sk = STRATEGY`). Its presence is
 what supersedes the three fixed patterns (Block 15, SI-3b). The item stores the
 imported strategy as the **verbatim H-tchen JSON** (the `StrategyJsonImporter`
-schema, Component 1b); the repository reparses it on read via
+schema, Blocks 15-16); the repository reparses it on read via
 `StrategyJsonImporter.fromJson` — no per-field DynamoDB mapping of scenarios /
 conditions, so the stored shape always matches the importer's authoritative
-schema and a strategy round-trips byte-for-byte.
+schema. The submitted JSON string is stored verbatim in `strategy_json`; reads
+return the normalized domain `Strategy` via `StrategyJsonImporter.fromJson`, not
+the original bytes (there is no raw-JSON read path).
 
 | Attribute       | Type    | Required | Notes                                                              |
 |-----------------|---------|----------|--------------------------------------------------------------------|
-| `strategy_json` | String  | yes      | verbatim imported strategy JSON (importer schema, Component 1b)    |
+| `strategy_json` | String  | yes      | verbatim imported strategy JSON (importer schema, Blocks 15-16)    |
 | `name`          | String  | yes      | denormalized strategy name (convenience; authoritative copy is inside `strategy_json`) |
 | `created_at`    | String  | yes      | ISO 8601 UTC                                                       |
 | `updated_at`    | String  | yes      | ISO 8601 UTC                                                       |
@@ -252,8 +254,10 @@ item stores **only the alert + retry bookkeeping — never the chart**: because 
 strategy is itself persisted (the `STRATEGY` item) and OHLC/HA bars are readable
 by count (`findLastN`), the retry poller **re-renders the chart** from the
 persisted `Strategy` + bars rather than carrying a (potentially >400 KB) PNG blob
-in the row. If the strategy was deleted between detection and retry, the poller
-sends a chart-degraded email.
+in the row. If the strategy was deleted between detection and retry, the missing
+strategy is treated as a render fault: the item is bumped like any chart failure,
+and only on the final attempt (at the retry cap) does the poller send a
+chart-degraded email (SI-3c.3).
 
 | Attribute       | Type    | Required | Notes                                                                       |
 |-----------------|---------|----------|-----------------------------------------------------------------------------|
@@ -1472,10 +1476,16 @@ failure (heerwisch/JFreeChart `RuntimeException`, not only the driver's checked
 caught by the chart-stage handler and enqueued/degraded rather than failing the
 whole instrument run — same contract as the legacy `HeerwischChartRenderer`.
 
-**SES-fault wrapping.** `SesEmailSender.sendRaw` classifies **both** `SesV2Exception`
-and any other AWS-SDK `SdkException` (client-side timeout / network / credentials)
-as a transient `DependencyUnavailableException`, so a client-side send fault is
-caught by dispatch / poller and enqueued / bumped instead of escaping.
+**SES-fault wrapping.** `SesEmailSender.sendRaw` classifies a send fault by type.
+A non-`SesV2Exception` AWS-SDK `SdkException` (client-side timeout / network /
+credentials) is treated as a transient `DependencyUnavailableException`, so it is
+caught by dispatch / poller and enqueued / bumped instead of escaping. A
+`SesV2Exception` is split by error code via `classify`: transient throttling / 5xx
+→ `DependencyUnavailableException` (retried); config / account errors
+(`AccessDeniedException`, `SendingPausedException`, anything `NotAuthorized`) →
+`SESConfigurationException` (surfaced, not retried); recipient-level rejects
+(`MessageRejected`, `MailFromDomainNotVerified`, address-format) → a failed
+`DeliveryResult` with no exception, handled as an ordinary non-delivery.
 
 **Audit.** A successful strategy send (first attempt *and* retry) records an
 `ALERT` audit item (§2) via `AlertAuditRepository.recordSentStrategyAlert`, reusing
@@ -1887,7 +1897,7 @@ Both:
                                   └── alerts dispatched (full or queued)
 
 22:15, 22:30, ... ─► retry-poller (every 15 min)
-                     └── recovers due PENDING_ALERTs, retry or degrade
+                     └── recovers due PENDING_ALERT and STRATEGY_PENDING_ALERT items, retry or degrade
 
 Sat-Sun: monitoring-main runs but is essentially a no-op (no new closed bars).
 retry-poller runs unchanged.
@@ -2821,8 +2831,8 @@ Namespace: `Monitoring/HeikinAshi`.
 | `HABarsComputed`             | `Timeframe`               | Count    |                                 |
 | `PatternsDetected`           | `Pattern`, `Subtype`      | Count    | per emitted event               |
 | `AlertsSent`                 | `Mode=full \| degraded`   | Count    | dispatch success                 |
-| `AlertsQueuedForRetry`       | —                         | Count    | enqueue `PENDING_ALERT`         |
-| `RetryItemsProcessed`        | —                         | Count    | end of `retry-poller`           |
+| `AlertsQueuedForRetry`       | `Queue=pattern \| strategy` | Count  | enqueue a `PENDING_ALERT` or `STRATEGY_PENDING_ALERT` |
+| `RetryItemsProcessed`        | `Queue=pattern \| strategy` | Count  | end of `retry-poller` (per queue drained) |
 | `BedrockToolIterations`      | —                         | Average  | per AI call                     |
 | `LambdaDurationSeconds`      | `Function`                | Seconds  | end of handler                  |
 
@@ -2832,7 +2842,7 @@ Namespace: `Monitoring/HeikinAshi`.
 |------------------------------------|-------------------------------------------|----------|
 | `MainNotRunning`                   | no invocation of `monitoring-main` in 26h | high     |
 | `MainFailureRate`                  | `InstrumentsFailed / InstrumentsProcessed > 30%` | medium |
-| `RetryBacklog`                     | `PENDING_ALERT` items > 50                | medium   |
+| `RetryBacklog`                     | `PENDING_ALERT` or `STRATEGY_PENDING_ALERT` items > 50 | medium   |
 | `BedrockHighErrorRate`             | `LLMException` > 10/h                     | medium   |
 | `LambdaErrors`                     | Lambda errors > 0                         | high     |
 | `DLQDepth`                         | DLQ messages > 0                          | high     |
