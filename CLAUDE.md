@@ -111,7 +111,7 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 |------------------------|--------------------------------------------------------|------------|-----------------------------------|
 | Primary                | `pk` / `sk`                                            | n/a        | n/a                               |
 | GSI1 `gsi_status`      | `gsi1Pk` (`STATUS#<active\|archived>`) / `gsi1Sk` (`INSTRUMENT#<id>`) | ALL  | only items with `entity=INSTRUMENT` |
-| GSI2 `gsi_retry_due`   | `gsi2Pk` (`RETRY_DUE`) / `gsi2Sk` (`<retry_at_iso>`)   | ALL        | only items with `entity=PENDING_ALERT` |
+| GSI2 `gsi_retry_due`   | `gsi2Pk` (`RETRY_DUE` \| `RETRY_DUE_STRATEGY`) / `gsi2Sk` (`<retry_at_iso>`)   | ALL        | items with `entity=PENDING_ALERT` (`RETRY_DUE`) or `entity=STRATEGY_PENDING_ALERT` (`RETRY_DUE_STRATEGY`) |
 
 ### Item type catalog
 
@@ -121,8 +121,10 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 | CONFIG         | `INSTRUMENT#<id>`                  | `CONFIG`                                                      | never                                |
 | OHLC           | `INSTRUMENT#<id>`                  | `OHLC#<tf>#<bar_time_iso>`                                    | per storage policy                   |
 | HA             | `INSTRUMENT#<id>`                  | `HA#<tf>#<bar_time_iso>`                                      | per storage policy                   |
+| STRATEGY       | `INSTRUMENT#<id>`                  | `STRATEGY`                                                    | never                                |
 | UNIQUE_LOCK    | `TICKER#<exchange>#<ticker>`       | `LOCK`                                                        | never                                |
 | PENDING_ALERT  | `PENDING_ALERT#<event_uid>`        | `META`                                                        | grace (e.g. 30 days after creation)  |
+| STRATEGY_PENDING_ALERT | `STRATEGY_PENDING_ALERT#<event_uid>` | `META`                                            | grace (e.g. 30 days after creation)  |
 | ALERT (audit)  | `INSTRUMENT#<id>`                  | `ALERT#<bar_time_iso>#<pattern>#<subtype>#<sent_at_ms>`       | 365 days                              |
 
 Where `<tf>` is `1d` or `1w`. `<bar_time_iso>` and `<retry_at_iso>` are full ISO 8601 strings (`yyyy-MM-ddTHH:mm:ssZ`).
@@ -174,6 +176,30 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 | `strong_candle` | `min_body_ratio`     | decimal | (0, 1]         | minimum body/range ratio                               |
 | `doji`          | `max_body_ratio`     | decimal | (0, 1]         | maximum body/range ratio to qualify as doji            |
 
+### STRATEGY attributes
+
+At most one STRATEGY item per instrument (single `sk = STRATEGY`). Its presence is
+what supersedes the three fixed patterns (Block 15, SI-3b). The item stores the
+imported strategy as the **verbatim H-tchen JSON** (the `StrategyJsonImporter`
+schema, Component 1b); the repository reparses it on read via
+`StrategyJsonImporter.fromJson` — no per-field DynamoDB mapping of scenarios /
+conditions, so the stored shape always matches the importer's authoritative
+schema and a strategy round-trips byte-for-byte.
+
+| Attribute       | Type    | Required | Notes                                                              |
+|-----------------|---------|----------|--------------------------------------------------------------------|
+| `strategy_json` | String  | yes      | verbatim imported strategy JSON (importer schema, Component 1b)    |
+| `name`          | String  | yes      | denormalized strategy name (convenience; authoritative copy is inside `strategy_json`) |
+| `created_at`    | String  | yes      | ISO 8601 UTC                                                       |
+| `updated_at`    | String  | yes      | ISO 8601 UTC                                                       |
+
+`findByInstrumentId` does a `GetItem` at `pk=INSTRUMENT#<id>, sk=STRATEGY`,
+returns empty when absent (the instrument keeps legacy detection), and otherwise
+returns `StrategyJsonImporter.fromJson(strategy_json)`. A corrupt stored JSON
+fails loud (`StrategyImportException`) rather than silently degrading to legacy.
+Writing is idempotent last-write-wins (`PutItem`, no condition): re-importing a
+strategy for the same instrument overwrites the single STRATEGY item.
+
 ### OHLC attributes
 
 | Attribute      | Type            | Required | Notes                                              |
@@ -217,6 +243,28 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 | `gsi2Pk`         | String  | yes      | `RETRY_DUE`                                                         |
 | `gsi2Sk`         | String  | yes      | `<retry_at_iso>`                                                    |
 | `ttl`            | Number  | yes      | `now + 30 days` safety net                                          |
+
+### STRATEGY_PENDING_ALERT attributes
+
+A failed **strategy** dispatch (Component 1c, SI-3c.3) queues here instead of the
+`PENDING_ALERT` partition, because a strategy alert is not a `PatternEvent` and
+its chart cannot be re-derived from the alert alone — it needs the `Strategy` +
+the HA bar window. Rather than reconstruct those in the poller, the item stores
+the **already-rendered chart PNG bytes** (when the chart rendered) so the poller
+reuses them and only re-runs the AI analyst + re-sends the email.
+
+| Attribute       | Type    | Required | Notes                                                                       |
+|-----------------|---------|----------|-----------------------------------------------------------------------------|
+| `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
+| `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
+| `chart_png`     | String  | no       | base64 PNG of the rendered chart; **absent** when the chart stage itself failed (the poller then sends chart-degraded) |
+| `retry_count`   | Number  | yes      | 0..3                                                                        |
+| `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
+| `last_error`    | Map      | yes      | `{ code, message, ts, component }`                                          |
+| `created_at`    | String  | yes      | ISO 8601 UTC                                                                |
+| `gsi2Pk`        | String  | yes      | `RETRY_DUE_STRATEGY` (distinct partition so the legacy poller never reads these) |
+| `gsi2Sk`        | String  | yes      | `<retry_at_iso>`                                                            |
+| `ttl`           | Number  | yes      | `created_at + 30 days` safety net                                           |
 
 ### ALERT (audit) attributes
 
@@ -1192,7 +1240,7 @@ Feature: Heikin Ashi Pattern Detection
 ```
 ingest → HA → detect → dispatch_alerts(events)
                           │
-                          ├─ render_chart (JFreeChart)         ──┐
+                          ├─ render_chart (heerwisch)          ──┐
                           ├─ run_ai_analyst (Bedrock Converse)  ──┤  best-effort
                           ├─ compose_multipart_email (Commons)  ──┤
                           └─ send via SesV2Client.sendEmail(raw)──┘
@@ -1201,18 +1249,252 @@ ingest → HA → detect → dispatch_alerts(events)
                           after 3 retries → degraded email + delete pending
 ```
 
-### Component 1 — Chart Renderer (JFreeChart)
+### Component 1 — Chart Renderer (heerwisch / ha-track)
+
+Since **Block 14** the chart is rendered by ha-track's **heerwisch** (the
+`heerwisch-api` `ChartSpec`/`ChartRenderer`, drawn by the headless
+`heerwisch-jfreechart` driver), shared with wichtelm-app. The original custom
+JFreeChart renderer is gone; the constraints below now read against heerwisch.
 
 | Aspect                            | Constraint                                                                                |
 |-----------------------------------|-------------------------------------------------------------------------------------------|
-| HA is not native OHLC for the lib | Pass HA values as if they were OHLC: `OHLCSeriesCollection` + `CandlestickRenderer`       |
-| Headless                          | Set `java.awt.headless=true` before any AWT class is loaded (Lambda default but make explicit) |
-| Output                            | PNG bytes via `ChartUtils.writeChartAsPNG(ByteArrayOutputStream, JFreeChart, w, h)`        |
-| Highlight pattern bar             | annotation on the `XYPlot` (e.g., `XYPointerAnnotation`) at `bar_time, ha_close`           |
+| HA candles                        | the HA lookback window → a commons `HASeries` via `CommonsBarAdapter`; heerwisch draws HA candles |
+| Headless                          | the heerwisch-jfreechart driver is headless and deterministic (embedded DejaVu Sans) — no display required |
+| Output                            | PNG bytes from the heerwisch `ChartImage`, mapped unchanged to the domain `ChartImage`     |
+| Highlight pattern bar             | `Annotation.BarHighlight` at `bar_time, ha_close` (the bar must be in the series — V7)     |
 | Volume sub-panel                  | optional, gated by `monitoring.chart.show-volume` (default `false`)                        |
-| Fonts                             | Lambda Java 25 ships with Liberation fonts; verify in test container                       |
 | Resolution                        | width/height from config; default 900×500                                                  |
 | No filesystem                     | All in memory                                                                              |
+
+### Component 1b — Strategy-driven chart overlays (Blocks 15-16 follow-up)
+
+For an instrument monitored by an imported **Strategy** (Blocks 15-16, which
+supersedes the three fixed patterns), the chart must additionally explain the
+*rule* visually.
+
+**As** an alert recipient of a strategy-monitored instrument, **I want** the
+chart to show only the indicators the strategy's scenario conditions reference
+(RSI sub-pane, SMA/EMA overlays, MACD sub-pane, …), **so that** the chart
+explains the rule that fired — only the relevant diagrams, nothing else.
+
+Derivation is **exclusive** and mirrors wichtelm-app's `HtmlReportGenerator`
+(indicator references found by scanning the condition strings for `name(args)`
+calls — `dsl-eval` exposes no referenced-indicator API), mapped to
+`Indicator.*` on `PriceSource.HA_CLOSE`:
+
+| condition references                                                            | → heerwisch Indicator                                            | pane    |
+|---------------------------------------------------------------------------------|------------------------------------------------------------------|---------|
+| `rsi(p)` / `rsi_overbought(t)` / `rsi_oversold(t)` / `rsi_crosses_50()`         | `RSI(p, ob, os, HA_CLOSE, DANGER_ZONES_ON)` (Tier-B → period 14, thresholds threaded) | SUBPLOT |
+| `macd_line/signal/histogram(f,s,sig)` / `macd_*_cross()` / `macd_zero_cross_*()`| `MACD(f,s,sig, HA_CLOSE)` (Tier-B → 12/26/9)                      | SUBPLOT |
+| `sma(p)` / `price_*_sma(p)` / `sma_*_ema(sp,ep)`                                 | `SMA(p, HA_CLOSE)` (+ `EMA(ep)` for the MA-vs-MA forms)           | MAIN    |
+| `ema(p)` / `price_*_ema(p)`                                                      | `EMA(p, HA_CLOSE)`                                                | MAIN    |
+| `atr(p)`                                                                         | `ATR(p)`                                                          | SUBPLOT |
+| `stddev(p)`                                                                      | `StdDev(p, HA_CLOSE)`                                             | SUBPLOT |
+| `highest_high/lowest_low/highest_close/lowest_close(p)`                          | `RollingMax/Min(p, …)`                                            | MAIN    |
+| `ha_*` primitives (doji / strong / reversal)                                     | none (already the HA candles)                                     | —       |
+
+Indicators are de-duplicated by `indicator.toString()`; an indicator referenced
+by several scenarios is drawn once.
+
+Increments:
+- **SI-1** — pure derivation `Strategy → List<Indicator>` (`StrategyChartIndicators`). DONE.
+- **SI-2** — build the `ChartSpec` for a `StrategyAlert` from the derived indicators + a role-direction marker on the trigger bar (`StrategyChartSpec`). DONE.
+- **SI-3b** — suppression: an instrument with a strategy no longer emits the legacy fixed-pattern alerts (Block 15). DONE.
+- **SI-3c.1** — render the `StrategyChartSpec` to PNG via a dedicated `StrategyChartRenderer` (domain port) backed by the heerwisch driver.
+- **SI-3c** — dedicated dispatch of a `StrategyAlert`: chart (SI-3c.1) → AI → email → retry/audit, via `StrategyAlert`-aware port overloads (dispatch fork "A", faithful: preserves all matched lines / roles / memo).
+- **SI-3 (orchestration)** — `MonitoringRunService` calls `detectStrategyAlert` for strategy instruments and routes the `StrategyAlert` to the dedicated dispatch.
+- **SI-3a** — strategy persistence: a `STRATEGY` item (§2) + `DynamoDbStrategyRepository` replacing the `NoOp`. The item stores the verbatim importer JSON; `findByInstrumentId` reparses via `StrategyJsonImporter.fromJson`, `save` is an idempotent `PutItem`.
+- **SI-3c.3** — retry for strategy alerts: a `STRATEGY_PENDING_ALERT` item (§2) storing the rendered chart bytes + the StrategyAlert JSON, enqueued on a failed dispatch and recovered by a `StrategyRetryPollerService` (reuse chart, re-run AI, degrade after the cap). See Component 1c "Retry for strategy alerts".
+
+**Trigger marker (display-only).** The matched bar carries a direction marker
+derived from each matched line's `role`, following wichtelm's capital-flow
+matrix. This is a *display* mapping only — the role stays verbatim in the email
+text (Block 16) and is never used for a trade decision. An unrecognized role
+falls back to a neutral `Annotation.BarHighlight` at `bar_time, ha_close`.
+
+| role          | `MarkerDirection` | `GlyphStyle`    |
+|---------------|-------------------|-----------------|
+| `long_entry`  | `LONG_ENTRY`      | `UP_TRIANGLE`   |
+| `short_entry` | `SHORT_ENTRY`     | `DOWN_TRIANGLE` |
+| `long_exit`   | `LONG_EXIT`       | `DOWN_TRIANGLE` |
+| `short_exit`  | `SHORT_EXIT`      | `UP_TRIANGLE`   |
+| (other)       | — neutral `BarHighlight` | —        |
+
+Indicators are placed by each indicator's `defaultPane()` (MAIN overlays in
+place; oscillators cycle the subplot slots), de-duplicated, and any whose period
+exceeds the window are skipped — the same placement loop the legacy
+`HeerwischChartRenderer` already uses.
+
+#### Domain operations (Gherkin)
+
+```gherkin
+Feature: Strategy-driven chart overlays
+
+  Scenario: Only the referenced oscillator is derived; HA primitives add nothing
+    Given a strategy whose single scenario references "rsi(14) crosses below 30" and "ha_bullish_reversal(3)"
+    When the chart indicators are derived
+    Then the derived indicators are exactly RSI(14) in a sub-pane
+
+  Scenario: An indicator referenced by several scenarios is derived once
+    Given a strategy with two scenarios referencing macd_bullish_cross() and macd_bearish_cross()
+    When the chart indicators are derived
+    Then the derived indicators are exactly MACD(12,26,9)
+
+  Scenario: Moving averages become main-pane overlays
+    Given a strategy referencing sma(50) and ema(200)
+    When the chart indicators are derived
+    Then the derived indicators are exactly SMA(50) and EMA(200), both in the MAIN pane
+
+  Scenario: A pure Heikin-Ashi strategy adds no overlays
+    Given a strategy referencing only ha_doji() and ha_strong_bullish()
+    When the chart indicators are derived
+    Then no chart indicators are derived
+
+  # SI-2 — the chart spec built for a strategy alert
+
+  Scenario: The strategy chart spec carries the derived overlays in their panes
+    Given a strategy referencing rsi(14) and sma(50)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec places RSI(14) in a sub-pane and SMA(50) in the MAIN pane
+
+  Scenario: A long_entry line places an up-triangle entry marker on the trigger bar
+    Given a strategy referencing rsi(14)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has an entry marker on the trigger bar with direction "LONG_ENTRY" and glyph "UP_TRIANGLE"
+
+  Scenario: A long_exit line places a down-triangle exit marker on the trigger bar
+    Given a strategy referencing macd_bearish_cross()
+    And a strategy alert with a "long_exit" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has an entry marker on the trigger bar with direction "LONG_EXIT" and glyph "DOWN_TRIANGLE"
+
+  Scenario: An unrecognized role falls back to a neutral bar highlight
+    Given a strategy referencing rsi(14)
+    And a strategy alert with a "watch" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has a neutral bar highlight on the trigger bar and no entry marker
+
+  # SI-3c.1 — render the spec to PNG via the heerwisch driver
+
+  Scenario: The strategy alert chart renders to a PNG the email can embed
+    Given a strategy referencing rsi(14) and sma(50)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy alert chart is rendered
+    Then a PNG chart image of 900x500 is produced
+
+  # SI-3a — strategy persistence: the STRATEGY item round-trips through the repository
+
+  Scenario: A saved strategy is read back by instrument id
+    Given an imported strategy JSON saved for instrument "abc-123"
+    When the strategy repository is queried for instrument "abc-123"
+    Then the strategy is returned with every scenario, role and condition intact
+
+  Scenario: An instrument with no STRATEGY item keeps legacy detection
+    When the strategy repository is queried for an instrument with no saved strategy
+    Then no strategy is returned
+
+  Scenario: Re-saving a strategy for the same instrument overwrites the single item
+    Given an imported strategy JSON saved for instrument "abc-123"
+    And a different strategy JSON saved for instrument "abc-123"
+    When the strategy repository is queried for instrument "abc-123"
+    Then the strategy returned is the most recently saved one
+```
+
+### Component 1c — Strategy alert dispatch (SI-3c)
+
+A `StrategyAlert` is dispatched by a dedicated `StrategyAlertDispatchService`
+that mirrors the legacy `AlertDispatchService` but is `StrategyAlert`-aware (the
+faithful "path A"): render chart (SI-3c.1) → AI → email, preserving every matched
+line / role / memo. The AI and email ports gain `StrategyAlert` overloads
+(`AiAnalyst.analyze(StrategyAlert)`, `EmailSender.sendFull(StrategyAlert, …)`);
+the email bodies show one line per matched scenario with the role and the
+verbatim stop/take/precondition memo (Block 16), never collapsed to a single
+pattern.
+
+SI-3c.2 covers the first-attempt happy path + the no-recipients skip.
+
+```gherkin
+Feature: Strategy alert dispatch (first attempt)
+
+  Scenario: A strategy alert is dispatched with chart, AI and email
+    Given an instrument with one recipient monitored by a strategy
+    And a strategy alert matched on the latest bar
+    When the strategy alert is dispatched
+    Then the strategy chart is rendered
+    And the AI analyst runs for the strategy alert
+    And a full email is sent to the recipient
+    And the dispatch counts {sent:1}
+
+  Scenario: A strategy alert with no recipients is skipped
+    Given an instrument with no recipients monitored by a strategy
+    And a strategy alert matched on the latest bar
+    When the strategy alert is dispatched
+    Then no email is sent
+    And the dispatch counts {skipped:1}
+```
+
+#### Retry for strategy alerts (SI-3c.3)
+
+A failed strategy dispatch is **retried**, mirroring the legacy
+`PENDING_ALERT` mechanics (§9 "Retry queue mechanics") with one twist: a strategy
+chart cannot be re-derived from the alert alone (it needs the `Strategy` + the HA
+bar window), so the queued `STRATEGY_PENDING_ALERT` item (§2) **stores the
+already-rendered chart PNG bytes**. The poller therefore never reconstructs
+`Strategy` + bars — it reuses the stored bytes, re-runs the AI analyst from the
+stored alert, and re-sends.
+
+| Behavior                                       | Rule                                                                              |
+|------------------------------------------------|-----------------------------------------------------------------------------------|
+| First transient failure (chart / AI / email)   | write `STRATEGY_PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code`, and `chart_png` when the chart had rendered |
+| Chart stage failed                             | no `chart_png` stored (the poller cannot re-render); any later send is chart-degraded |
+| Poller picks up due items                       | Query GSI2 with `gsi2Pk=RETRY_DUE_STRATEGY` and `gsi2Sk <= now`                   |
+| Poller, per item                                | reuse stored `chart_png` (no re-render); re-run `AiAnalyst.analyze(alert)`; send  |
+| On success                                      | DeleteItem `STRATEGY_PENDING_ALERT`                                               |
+| On failure with `retry_count + 1 < 3`           | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated          |
+| On failure with `retry_count + 1 == 3`          | Send **degraded** email (stored chart if any; AI section empty if AI still fails); DeleteItem |
+| No recipients at poll time                       | DeleteItem and skip                                                              |
+| Idempotency / races                             | enqueue `attribute_not_exists(pk)`; bump conditional on `retry_count` — same as legacy |
+
+The `retry-poller` Lambda (§10) runs **both** queues each tick: the legacy
+`PENDING_ALERT` batch then the `STRATEGY_PENDING_ALERT` batch.
+
+```gherkin
+Feature: Strategy alert retry
+
+  Scenario: A transient AI failure on first attempt enqueues a strategy pending alert
+    Given an instrument with one recipient monitored by a strategy
+    And a strategy alert matched on the latest bar
+    And the AI analyst fails on the next 1 attempt
+    When the strategy alert is dispatched
+    Then no strategy email is sent
+    And a strategy pending alert is enqueued with retry_count 0
+    And the enqueued strategy pending alert carries the rendered chart bytes
+    And the strategy dispatch counts queued 1
+
+  Scenario: The poller reuses the stored chart bytes and does not re-render
+    Given a strategy pending alert is queued with retry_count 0 and a stored chart due now
+    And the AI analyst and email now succeed
+    When the strategy retry poller runs
+    Then the strategy chart is not re-rendered
+    And a full strategy email is sent
+    And the strategy pending alert is deleted
+
+  Scenario: Chart-stage failures degrade after the max attempts
+    Given a strategy pending alert is queued with retry_count 2 and no stored chart due now
+    And the AI analyst now succeeds
+    When the strategy retry poller runs
+    Then a degraded strategy email is sent without a chart
+    And the strategy pending alert is deleted
+
+  Scenario: A transient failure under the cap bumps the retry count
+    Given a strategy pending alert is queued with retry_count 0 and a stored chart due now
+    And the AI analyst fails on the next 1 attempt
+    When the strategy retry poller runs
+    Then no strategy email is sent
+    And the strategy pending alert retry_count is 1
+```
 
 ### Component 2 — AI Analyst (Bedrock Converse + tool-use loop)
 
@@ -1550,7 +1832,7 @@ retry_poller_handler(input):
 | Function             | Trigger                                  | Memory | Timeout | Concurrency | Purpose                                |
 |----------------------|------------------------------------------|--------|---------|-------------|----------------------------------------|
 | `monitoring-main`    | EventBridge cron `0 22 * * ? *` (daily)  | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
-| `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` items       |
+| `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` then `STRATEGY_PENDING_ALERT` items (SI-3c.3) |
 
 Both:
 - runtime `java25` managed
@@ -2326,6 +2608,14 @@ Feature: Monitor an imported strategy, stateless
     When evaluation runs
     Then nachtkrapp's InsufficientDataException is handled
     And no alert is produced for that scenario
+
+  # SI-3 orchestration — the run routes a strategy alert to the dedicated dispatch
+  Scenario: A strategy instrument dispatches a strategy alert in a run
+    Given an instrument monitored by a strategy whose scenario matches on the latest bar
+    When monitoring-main runs
+    Then the strategy alert is dispatched via the dedicated strategy dispatch (chart + AI + email)
+    And no legacy fixed-pattern alert is produced for it
+    And the run counts it among alerts sent
 ```
 
 **Operational invariants**

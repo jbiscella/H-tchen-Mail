@@ -19,6 +19,9 @@ import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.DomainException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
@@ -53,10 +56,15 @@ public class MonitoringRunService {
     private final HeikinAshiService heikinAshiService;
     private final PatternDetectionService detectionService;
     private final AlertDispatchService dispatchService;
+    private final StrategyRepository strategies;
+    private final StrategyAlertDispatchService strategyDispatchService;
     private final OhlcRepository ohlcRepository;
     private final HaRepository haRepository;
     private final Clock clock;
     private final Duration softTimeout;
+
+    /** HA lookback window read for the strategy alert chart (overlays + candles). */
+    private static final int STRATEGY_CHART_LOOKBACK_BARS = 120;
 
     public MonitoringRunService(
             InstrumentRepository instruments,
@@ -64,6 +72,8 @@ public class MonitoringRunService {
             HeikinAshiService heikinAshiService,
             PatternDetectionService detectionService,
             AlertDispatchService dispatchService,
+            StrategyRepository strategies,
+            StrategyAlertDispatchService strategyDispatchService,
             OhlcRepository ohlcRepository,
             HaRepository haRepository,
             Clock clock,
@@ -73,6 +83,8 @@ public class MonitoringRunService {
         this.heikinAshiService = heikinAshiService;
         this.detectionService = detectionService;
         this.dispatchService = dispatchService;
+        this.strategies = strategies;
+        this.strategyDispatchService = strategyDispatchService;
         this.ohlcRepository = ohlcRepository;
         this.haRepository = haRepository;
         this.clock = clock;
@@ -124,6 +136,33 @@ public class MonitoringRunService {
                     instrumentEvents.addAll(events);
                     summary = summary.addEvents(events.size());
                     realEventForTf.merge(entry.getKey(), !events.isEmpty(), Boolean::logicalOr);
+
+                    // Strategy path (Block 15-16): a strategy supersedes the fixed
+                    // patterns (legacy detection above already returns nothing for a
+                    // strategy instrument). When the strategy's scenarios match the
+                    // latest bar, route the StrategyAlert to the dedicated dispatch.
+                    Optional<Strategy> strategy = strategies.findByInstrumentId(inst.id());
+                    if (strategy.isPresent()) {
+                        Optional<StrategyAlert> strategyAlert =
+                                detectionService.detectStrategyAlert(inst, entry.getKey(), haBars);
+                        if (strategyAlert.isPresent()) {
+                            summary = summary.addEvents(1);
+                            realEventForTf.merge(entry.getKey(), true, Boolean::logicalOr);
+                            List<HABar> chartBars = haRepository.findLastNBefore(
+                                    inst.id(),
+                                    entry.getKey(),
+                                    strategyAlert.get().barTime().plusNanos(1),
+                                    STRATEGY_CHART_LOOKBACK_BARS);
+                            summary = summary.withDispatch(
+                                    strategyDispatchService.dispatch(strategyAlert.get(), strategy.get(), chartBars));
+                            LOG.info(
+                                    "main_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
+                                    inst.id(),
+                                    entry.getKey().wire(),
+                                    strategyAlert.get().barTime(),
+                                    strategy.get().name());
+                        }
+                    }
                 }
 
                 // force_email escape hatch: for every tracked timeframe that did

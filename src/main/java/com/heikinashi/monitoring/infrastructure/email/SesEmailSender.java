@@ -60,6 +60,90 @@ public class SesEmailSender implements EmailSender {
     }
 
     @Override
+    public List<DeliveryResult> sendFull(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            ChartImage chart,
+            AiAnalysis analysis,
+            Set<String> recipients) {
+        return sendStrategyFanout(alert, Optional.of(chart), Optional.of(analysis), recipients);
+    }
+
+    @Override
+    public List<DeliveryResult> sendDegraded(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            Optional<ChartImage> chart,
+            Optional<AiAnalysis> analysis,
+            Set<String> recipients,
+            AlertEnrichment enrichment) {
+        return sendStrategyFanout(alert, chart, analysis, recipients);
+    }
+
+    private List<DeliveryResult> sendStrategyFanout(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            Optional<ChartImage> chart,
+            Optional<AiAnalysis> analysis,
+            Set<String> recipients) {
+        List<DeliveryResult> results = new ArrayList<>(recipients.size());
+        for (String recipient : recipients) {
+            results.add(deliverStrategy(alert, chart, analysis, recipient));
+        }
+        return results;
+    }
+
+    private DeliveryResult deliverStrategy(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            Optional<ChartImage> chart,
+            Optional<AiAnalysis> analysis,
+            String recipient) {
+        byte[] raw;
+        try {
+            raw = composeRawStrategy(alert, chart, analysis, recipient);
+        } catch (EmailCompositionException e) {
+            LOG.error(
+                    "email_compose_failed instrument_id={} recipient_masked={} cause={}",
+                    alert.instrumentId(),
+                    mask(recipient),
+                    e.getMessage());
+            return new DeliveryResult(recipient, false, Optional.empty(), Optional.of("EMAIL_COMPOSITION_FAILED"));
+        }
+        return sendRaw(raw, recipient, alert.instrumentId());
+    }
+
+    private byte[] composeRawStrategy(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            Optional<ChartImage> chart,
+            Optional<AiAnalysis> analysis,
+            String recipient) {
+        try {
+            HtmlEmail email = new HtmlEmail();
+            email.setHostName("localhost");
+            email.setCharset(config.getCharset());
+            email.setFrom(config.getSenderEmail());
+            email.addTo(recipient);
+            if (config.getReplyTo() != null && !config.getReplyTo().isBlank()) {
+                email.addReplyTo(config.getReplyTo());
+            }
+            email.setSubject(EmailBodies.subject(config.getSubjectPrefix(), alert));
+            Optional<String> chartCid = Optional.empty();
+            if (chart.isPresent()) {
+                ByteArrayDataSource ds =
+                        new ByteArrayDataSource(chart.get().bytes(), chart.get().contentType());
+                chartCid = Optional.of(email.embed(ds, INLINE_NAME));
+            }
+            email.setTextMsg(EmailBodies.plainText(alert, analysis));
+            email.setHtmlMsg(EmailBodies.html(alert, chartCid, analysis));
+            email.buildMimeMessage();
+            MimeMessage mime = email.getMimeMessage();
+            try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                mime.writeTo(out);
+                return out.toByteArray();
+            }
+        } catch (EmailException | MessagingException | IOException e) {
+            throw new EmailCompositionException(e);
+        }
+    }
+
+    @Override
     public List<DeliveryResult> sendDegraded(
             PatternEvent event,
             Optional<ChartImage> chart,
@@ -99,6 +183,11 @@ public class SesEmailSender implements EmailSender {
                     e.getMessage());
             return new DeliveryResult(recipient, false, Optional.empty(), Optional.of("EMAIL_COMPOSITION_FAILED"));
         }
+        return sendRaw(raw, recipient, event.instrumentId());
+    }
+
+    /** Ship pre-composed raw MIME bytes to SES, classifying any per-recipient failure. */
+    private DeliveryResult sendRaw(byte[] raw, String recipient, String instrumentId) {
         try {
             SendEmailResponse resp = client.sendEmail(SendEmailRequest.builder()
                     .fromEmailAddress(config.getSenderEmail())
@@ -114,7 +203,7 @@ public class SesEmailSender implements EmailSender {
             String code = errorCode(e);
             LOG.warn(
                     "ses_send_failed instrument_id={} recipient_masked={} code={} message={}",
-                    event.instrumentId(),
+                    instrumentId,
                     mask(recipient),
                     code,
                     e.getMessage());

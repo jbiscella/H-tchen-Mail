@@ -104,7 +104,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
     @Override
     public AiAnalysis analyze(PatternEvent event) {
         try {
-            return runLoop(event);
+            return runLoop(buildUserMessage(event), event.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -112,12 +112,23 @@ public class BedrockAiAnalyst implements AiAnalyst {
         }
     }
 
-    private AiAnalysis runLoop(PatternEvent event) {
-        // The tool catalog is per-event: news tools scope recency to the
-        // pattern's timeframe (CLAUDE.md §9 / Marketaux published_after).
-        ToolCatalog catalog = new ToolCatalog(provider, event.timeframe());
+    @Override
+    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+        try {
+            return runLoop(buildUserMessage(alert), alert.timeframe());
+        } catch (LLMException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new LLMException("Bedrock invocation failed", e);
+        }
+    }
+
+    private AiAnalysis runLoop(Message userMessage, com.heikinashi.monitoring.domain.Timeframe tf) {
+        // The tool catalog is per-alert: news tools scope recency to the
+        // alert's timeframe (CLAUDE.md §9 / Marketaux published_after).
+        ToolCatalog catalog = new ToolCatalog(provider, tf);
         List<Message> messages = new ArrayList<>();
-        messages.add(buildUserMessage(event));
+        messages.add(userMessage);
 
         for (int i = 0; i < config.getMaxToolIterations(); i++) {
             ConverseResponse resp = client.converse(buildRequest(messages, true, catalog));
@@ -180,6 +191,38 @@ public class BedrockAiAnalyst implements AiAnalyst {
         return Message.builder()
                 .role(ConversationRole.USER)
                 .content(ContentBlock.fromText(prompt))
+                .build();
+    }
+
+    private Message buildUserMessage(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Strategy alert:\n")
+                .append("  instrument: ")
+                .append(alert.ticker())
+                .append(" on ")
+                .append(alert.exchange())
+                .append("\n")
+                .append("  timeframe: ")
+                .append(alert.timeframe().wire())
+                .append("\n")
+                .append("  bar_time: ")
+                .append(alert.barTime())
+                .append("\n")
+                .append("  strategy: ")
+                .append(alert.strategyName())
+                .append("\n")
+                .append("  matched scenarios:\n");
+        for (com.heikinashi.monitoring.domain.strategy.StrategyAlertLine line : alert.lines()) {
+            sb.append("    - ")
+                    .append(line.scenarioName())
+                    .append(" [")
+                    .append(line.role())
+                    .append("]\n");
+        }
+        sb.append("Decide which tools to call, then write the note as JSON only.");
+        return Message.builder()
+                .role(ConversationRole.USER)
+                .content(ContentBlock.fromText(sb.toString()))
                 .build();
     }
 

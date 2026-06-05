@@ -9,6 +9,7 @@ import com.heikinashi.monitoring.application.InMemoryInstrumentRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
 import com.heikinashi.monitoring.application.InMemoryPendingAlertRepository;
+import com.heikinashi.monitoring.application.InMemoryPendingStrategyAlertRepository;
 import com.heikinashi.monitoring.application.InMemoryStrategyRepository;
 import com.heikinashi.monitoring.application.IngestionConfig;
 import com.heikinashi.monitoring.application.IngestionService;
@@ -19,6 +20,9 @@ import com.heikinashi.monitoring.application.PatternDetectionService;
 import com.heikinashi.monitoring.application.RetryPollerService;
 import com.heikinashi.monitoring.application.ScriptedAiAnalyst;
 import com.heikinashi.monitoring.application.ScriptedChartRenderer;
+import com.heikinashi.monitoring.application.ScriptedStrategyChartRenderer;
+import com.heikinashi.monitoring.application.StrategyAlertDispatchService;
+import com.heikinashi.monitoring.application.StrategyRetryPollerService;
 import com.heikinashi.monitoring.application.config.AlertsConfig;
 import com.heikinashi.monitoring.application.config.RetryConfig;
 import com.heikinashi.monitoring.application.config.RunConfig;
@@ -59,8 +63,11 @@ public final class World {
     private final InMemoryHaRepository haRepository = new InMemoryHaRepository();
     private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
     private final InMemoryPendingAlertRepository pendingAlerts = new InMemoryPendingAlertRepository();
+    private final InMemoryPendingStrategyAlertRepository pendingStrategyAlerts =
+            new InMemoryPendingStrategyAlertRepository();
     private final InMemoryStrategyRepository strategyRepository = new InMemoryStrategyRepository();
     private final ScriptedChartRenderer chartRenderer = new ScriptedChartRenderer();
+    private final ScriptedStrategyChartRenderer strategyChartRenderer = new ScriptedStrategyChartRenderer();
     private final ScriptedAiAnalyst aiAnalyst = new ScriptedAiAnalyst();
     private final CapturingEmailSender emailSender = new CapturingEmailSender();
     private final CapturingAlertAuditRepository auditRepo = new CapturingAlertAuditRepository();
@@ -73,12 +80,16 @@ public final class World {
     private HeikinAshiService heikinAshiService;
     private PatternDetectionService patternDetectionService;
     private AlertDispatchService alertDispatchService;
+    private StrategyAlertDispatchService strategyAlertDispatchService;
     private RetryPollerService retryPollerService;
+    private StrategyRetryPollerService strategyRetryPollerService;
     private MonitoringRunService monitoringRunService;
     private boolean auditEnabled;
     private Duration mainSoftTimeout = Duration.ofMinutes(13);
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
 
+    private com.heikinashi.monitoring.domain.strategy.Strategy currentStrategy;
+    private com.heikinashi.monitoring.domain.strategy.StrategyAlert currentStrategyAlert;
     private Instrument lastInstrument;
     private Page<Instrument> lastPage;
     private InstrumentConfig lastConfig;
@@ -156,6 +167,10 @@ public final class World {
                 clock,
                 retryConfig,
                 alertsConfig);
+        strategyAlertDispatchService = new StrategyAlertDispatchService(
+                repository, strategyChartRenderer, aiAnalyst, emailSender, pendingStrategyAlerts, clock, retryConfig);
+        strategyRetryPollerService = new StrategyRetryPollerService(
+                repository, aiAnalyst, emailSender, pendingStrategyAlerts, clock, retryConfig);
         retryPollerService = new RetryPollerService(
                 repository,
                 chartRenderer,
@@ -172,6 +187,8 @@ public final class World {
                 heikinAshiService,
                 patternDetectionService,
                 alertDispatchService,
+                strategyRepository,
+                strategyAlertDispatchService,
                 ohlcRepository,
                 haRepository,
                 clock,
@@ -224,11 +241,51 @@ public final class World {
         return alertDispatchService;
     }
 
+    public ScriptedStrategyChartRenderer strategyChartRenderer() {
+        return strategyChartRenderer;
+    }
+
+    public StrategyAlertDispatchService strategyAlertDispatchService() {
+        if (strategyAlertDispatchService == null) {
+            throw new IllegalStateException(
+                    "strategyAlertDispatchService not initialised; call configureExchanges first");
+        }
+        return strategyAlertDispatchService;
+    }
+
     public RetryPollerService retryPollerService() {
         if (retryPollerService == null) {
             throw new IllegalStateException("retryPollerService not initialised; call configureExchanges first");
         }
         return retryPollerService;
+    }
+
+    public StrategyRetryPollerService strategyRetryPollerService() {
+        if (strategyRetryPollerService == null) {
+            throw new IllegalStateException(
+                    "strategyRetryPollerService not initialised; call configureExchanges first");
+        }
+        return strategyRetryPollerService;
+    }
+
+    public InMemoryPendingStrategyAlertRepository pendingStrategyAlerts() {
+        return pendingStrategyAlerts;
+    }
+
+    public com.heikinashi.monitoring.domain.strategy.Strategy currentStrategy() {
+        return currentStrategy;
+    }
+
+    public void setCurrentStrategy(com.heikinashi.monitoring.domain.strategy.Strategy strategy) {
+        this.currentStrategy = strategy;
+    }
+
+    public com.heikinashi.monitoring.domain.strategy.StrategyAlert currentStrategyAlert() {
+        return currentStrategyAlert;
+    }
+
+    public void setCurrentStrategyAlert(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+        this.currentStrategyAlert = alert;
     }
 
     public List<PatternEvent> stagedEvents() {
@@ -264,6 +321,10 @@ public final class World {
             throw new IllegalStateException("patternDetectionService not initialised; call configureExchanges first");
         }
         return patternDetectionService;
+    }
+
+    public InMemoryStrategyRepository strategyRepository() {
+        return strategyRepository;
     }
 
     public HeikinAshiService heikinAshiService() {

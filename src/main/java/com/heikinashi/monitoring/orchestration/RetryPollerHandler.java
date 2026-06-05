@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.orchestration;
 
 import com.heikinashi.monitoring.application.RetryPollerService;
+import com.heikinashi.monitoring.application.StrategyRetryPollerService;
 import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.infrastructure.BuildInfo;
 import io.micronaut.function.aws.MicronautRequestHandler;
@@ -13,10 +14,11 @@ import org.slf4j.LoggerFactory;
 /**
  * AWS Lambda entry point for {@code retry-poller} (CLAUDE.md §10).
  *
- * <p>EventBridge fires every 15 minutes; the handler delegates to
- * {@link RetryPollerService#processBatch()} which queries due
- * {@code PENDING_ALERT} items, retries them, and either deletes or bumps
- * each one. Returns the structured summary for CloudWatch.
+ * <p>EventBridge fires every 15 minutes; the handler runs both retry queues:
+ * the legacy {@code PENDING_ALERT} batch via {@link RetryPollerService} then the
+ * {@code STRATEGY_PENDING_ALERT} batch via {@link StrategyRetryPollerService}
+ * (SI-3c.3). Each due item is retried and either deleted or bumped. Returns the
+ * structured summary (legacy + strategy counts) for CloudWatch.
  */
 public class RetryPollerHandler extends MicronautRequestHandler<Map<String, Object>, Map<String, Object>> {
 
@@ -26,17 +28,25 @@ public class RetryPollerHandler extends MicronautRequestHandler<Map<String, Obje
     RetryPollerService pollerService;
 
     @Inject
+    StrategyRetryPollerService strategyPollerService;
+
+    @Inject
     BuildInfo buildInfo;
 
     @Override
     public Map<String, Object> execute(Map<String, Object> input) {
         LOG.info("build_info run=retry-poller build={}", buildInfo.label());
         PollResult result = pollerService.processBatch();
+        PollResult strategyResult = strategyPollerService.processBatch();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("processed", result.processed());
         m.put("sent_full", result.sentFull());
         m.put("sent_degraded", result.sentDegraded());
         m.put("requeued", result.requeued());
+        m.put("strategy_processed", strategyResult.processed());
+        m.put("strategy_sent_full", strategyResult.sentFull());
+        m.put("strategy_sent_degraded", strategyResult.sentDegraded());
+        m.put("strategy_requeued", strategyResult.requeued());
         return m;
     }
 }
