@@ -32,10 +32,11 @@ import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
  * {@code RETRY_DUE} so {@link #queryDue(Instant, int)} never reads (and the
  * legacy poller never sees) the other's items.
  *
- * <p>The alert is stored as JSON ({@link StrategyAlertJson}); the rendered chart,
- * when present, is stored as base64 PNG bytes so the poller reuses it without
- * reconstructing {@code Strategy} + bars. Same idempotent enqueue / conditional
- * bump as {@link DynamoDbPendingAlertRepository}.
+ * <p>The item stores <b>only the alert JSON ({@link StrategyAlertJson}) + retry
+ * bookkeeping — never the chart</b>: the poller re-renders from the persisted
+ * {@code Strategy} + bars on retry, so no (potentially &gt;400&nbsp;KB) PNG blob
+ * is carried in the row. Same idempotent enqueue / conditional bump as
+ * {@link DynamoDbPendingAlertRepository}.
  */
 @Singleton
 public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAlertRepository {

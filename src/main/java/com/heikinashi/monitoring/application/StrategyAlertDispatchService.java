@@ -42,10 +42,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>SI-3c.2 was the first-attempt happy path + no-recipients skip. SI-3c.3 adds
  * retry: on a transient failure the alert is enqueued as a
- * {@link PendingStrategyAlert} that <b>stores the already-rendered chart bytes</b>
- * (when the chart had rendered) so the {@link StrategyRetryPollerService} never
- * reconstructs {@code Strategy} + bars. A chart-stage failure stores no bytes;
- * any later send is then chart-degraded.
+ * {@link PendingStrategyAlert} that stores <b>only the alert + retry bookkeeping,
+ * never the chart</b>. Because the {@code Strategy} is persisted and bars are
+ * readable by count, the {@link StrategyRetryPollerService} <b>re-renders</b> the
+ * chart from {@code Strategy} + bars on retry rather than carrying a
+ * (potentially &gt;400&nbsp;KB) PNG blob in the row.
  */
 @Singleton
 public class StrategyAlertDispatchService {
