@@ -150,8 +150,11 @@ jobs:
           severity: LOW,MEDIUM,HIGH,CRITICAL
           exit-code: '0'
 
+      # Fork PRs get a read-only GITHUB_TOKEN, so the SARIF upload (which needs
+      # security-events: write) would fail the job. Skip it for forked PRs; the
+      # gate step below still runs and protects the build.
       - name: Upload Trivy SARIF to code scanning
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif

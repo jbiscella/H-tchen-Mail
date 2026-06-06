@@ -32,6 +32,14 @@ Feature: SI-3c.3 — Strategy alert retry
     And a full strategy email is sent to "alice@example.com"
     And the strategy pending alert is deleted
 
+  Scenario: Retry restores the trigger bar evicted by retention so the chart still renders
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now carrying its trigger bar
+    When the strategy retry poller runs
+    Then the re-rendered chart includes the trigger bar
+    And a full strategy email is sent to "alice@example.com"
+    And the strategy pending alert is deleted
+
   Scenario: A missing strategy at retry degrades to a chart-less email after the cap
     Given no strategy is persisted for the instrument
     And a strategy pending alert is queued with retry_count 2 due now

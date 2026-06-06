@@ -122,6 +122,39 @@ class DynamoDbInstrumentRepositoryIT extends LocalStackITBase {
     }
 
     @Test
+    void hardDelete_also_removes_the_strategy_item() {
+        Instrument inst = sampleInstrument("AAPL", "NASDAQ");
+        repo.register(inst, InstrumentConfig.defaults(inst.createdAt()));
+        // Seed a STRATEGY item directly under the instrument partition.
+        CLIENT.putItem(software.amazon.awssdk.services.dynamodb.model.PutItemRequest.builder()
+                .tableName(TABLE_NAME)
+                .item(java.util.Map.of(
+                        "pk",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS(
+                                Keys.instrumentPk(inst.id())),
+                        "sk",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS(Keys.SK_STRATEGY),
+                        "entity",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS(Keys.ENTITY_STRATEGY),
+                        "strategy_json",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS("{}")))
+                .build());
+
+        repo.hardDelete(inst.id());
+
+        var got = CLIENT.getItem(software.amazon.awssdk.services.dynamodb.model.GetItemRequest.builder()
+                .tableName(TABLE_NAME)
+                .key(java.util.Map.of(
+                        "pk",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS(
+                                Keys.instrumentPk(inst.id())),
+                        "sk",
+                        software.amazon.awssdk.services.dynamodb.model.AttributeValue.fromS(Keys.SK_STRATEGY)))
+                .build());
+        assertThat(got.hasItem()).isFalse();
+    }
+
+    @Test
     void hardDelete_is_idempotent_on_a_never_existed_id() {
         repo.hardDelete("never-existed");
         repo.hardDelete("never-existed");
