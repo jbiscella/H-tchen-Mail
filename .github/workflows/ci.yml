@@ -125,10 +125,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      # Build the shaded jar (no tests) so Trivy sees the full *transitive*
-      # dependency set bundled inside it, not just the direct pom.xml entries —
-      # the screenshot vulns (commons-email2, micronaut transitives) live there.
-      - name: Package fat jar (skip tests)
+      # Resolve every compile/runtime dependency POM into ~/.m2 so Trivy's
+      # pom.xml analyzer can walk the *transitive* tree from the local repo
+      # (Trivy parses pom.xml and reads dependency POMs from ~/.m2/repository —
+      # the screenshot vulns commons-email2 + micronaut transitives live there).
+      # Scanning the shaded jar instead yields 0 findings, so we scan the project.
+      # `package` (proven in the verify job) reliably resolves the full tree into
+      # ~/.m2; the built jar itself is unused by the scan.
+      - name: Resolve dependencies into ~/.m2
         run: mvn -B -ntp -DskipTests -Djacoco.skip=true package
 
       # Report pass: every severity -> SARIF -> GitHub Security tab. Never fails
@@ -139,7 +143,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
-          scan-ref: target
+          scan-ref: .
           scanners: vuln
           format: sarif
           output: trivy-results.sarif
@@ -160,7 +164,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
-          scan-ref: target
+          scan-ref: .
           scanners: vuln
           format: table
           severity: HIGH,CRITICAL
