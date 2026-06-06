@@ -3,6 +3,7 @@ package com.heikinashi.monitoring.cucumber;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.AlertEnrichment;
+import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
@@ -15,6 +16,7 @@ import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -77,10 +79,33 @@ public class StrategyRetrySteps {
 
     @Given("a strategy pending alert is queued with retry_count {int} due now")
     public void a_strategy_pending_alert_is_queued(int retryCount) {
+        enqueuePending(retryCount, Optional.empty());
+    }
+
+    @Given("a strategy pending alert is queued with retry_count {int} due now carrying its trigger bar")
+    public void a_strategy_pending_alert_is_queued_carrying_trigger_bar(int retryCount) {
+        StrategyAlert alert = seedAlert();
+        // The HA repository deliberately has NO bar at alert.barTime() (retention
+        // evicted it); the pending carries the triggering bar's snapshot so the
+        // retry can synthesize it back into the series before rendering.
+        HABar trigger = new HABar(
+                alert.instrumentId(),
+                alert.timeframe(),
+                alert.barTime(),
+                new BigDecimal("100"),
+                new BigDecimal("110"),
+                new BigDecimal("95"),
+                new BigDecimal("105"),
+                alert.detectedAt());
+        enqueuePending(retryCount, Optional.of(trigger));
+    }
+
+    private void enqueuePending(int retryCount, Optional<HABar> triggerBar) {
         StrategyAlert alert = seedAlert();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),
                 alert,
+                triggerBar,
                 retryCount,
                 world.now(),
                 new PendingAlert.LastError("LLM_ERROR", "seeded", world.now(), Optional.of("ai")),
@@ -110,6 +135,14 @@ public class StrategyRetrySteps {
     @Then("the strategy chart is re-rendered from the persisted strategy")
     public void the_strategy_chart_is_re_rendered() {
         assertThat(world.strategyChartRenderer().callCount()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Then("the re-rendered chart includes the trigger bar")
+    public void the_re_rendered_chart_includes_the_trigger_bar() {
+        Instant at = world.currentStrategyAlert().barTime();
+        assertThat(world.strategyChartRenderer().lastBars())
+                .as("synthesized trigger bar must be in the rendered series")
+                .anyMatch(b -> b.barTime().equals(at));
     }
 
     @Then("a full strategy email is sent to {string}")

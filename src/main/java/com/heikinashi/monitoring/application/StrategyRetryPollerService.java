@@ -27,6 +27,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -120,7 +121,7 @@ public class StrategyRetryPollerService {
             return result;
         }
 
-        Optional<ChartImage> chart = reRenderChart(alert);
+        Optional<ChartImage> chart = reRenderChart(pending);
 
         Optional<AiAnalysis> analysis;
         try {
@@ -147,7 +148,8 @@ public class StrategyRetryPollerService {
      * strategy was deleted since detection, or the render still fails (the send is
      * then chart-degraded).
      */
-    private Optional<ChartImage> reRenderChart(StrategyAlert alert) {
+    private Optional<ChartImage> reRenderChart(PendingStrategyAlert pending) {
+        StrategyAlert alert = pending.alert();
         Optional<Strategy> strategy = strategies.findByInstrumentId(alert.instrumentId());
         if (strategy.isEmpty()) {
             LOG.warn(
@@ -156,14 +158,36 @@ public class StrategyRetryPollerService {
                     alert.barTime());
             return Optional.empty();
         }
-        List<HABar> bars =
-                haRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS);
+        List<HABar> bars = withTriggerBar(
+                haRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
+                alert.barTime(),
+                pending.triggerBar());
         try {
             return Optional.of(chartRenderer.render(alert, strategy.get(), bars));
         } catch (ChartRenderException | DependencyUnavailableException e) {
             logRetryFailure(alert, "chart", e);
             return Optional.empty();
         }
+    }
+
+    /**
+     * Ensure the triggering bar is in the series before rendering. Under
+     * {@code SNAPSHOT_ONLY} retention a later ingest can evict the bar at
+     * {@code barTime} before the retry runs, but heerwisch requires the entry/exit
+     * marker to sit on a bar that is present (V7). When the lookback no longer
+     * contains it, splice the persisted snapshot back in (ascending, no
+     * duplicate) — mirroring the legacy {@code HeerwischChartRenderer} fallback.
+     * Returns the input unchanged when the bar is present or no snapshot was kept.
+     */
+    static List<HABar> withTriggerBar(List<HABar> bars, Instant barTime, Optional<HABar> triggerBar) {
+        boolean present = bars.stream().anyMatch(b -> b.barTime().equals(barTime));
+        if (present || triggerBar.isEmpty()) {
+            return bars;
+        }
+        List<HABar> restored = new ArrayList<>(bars);
+        restored.add(triggerBar.get());
+        restored.sort(Comparator.comparing(HABar::barTime));
+        return restored;
     }
 
     private PollResult sendAndFinish(

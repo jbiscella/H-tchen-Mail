@@ -1,9 +1,12 @@
 package com.heikinashi.monitoring.infrastructure.dynamodb;
 
+import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import jakarta.inject.Singleton;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -135,6 +138,15 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
         item.put("entity", s(Keys.ENTITY_STRATEGY_PENDING_ALERT));
         item.put("event_uid", s(pa.eventUid()));
         item.put("alert", s(StrategyAlertJson.toJson(pa.alert())));
+        // Triggering HA bar OHLC snapshot, so the retry can synthesize it back if
+        // retention evicts the bar before then (CLAUDE.md §2 / Component 1c).
+        // instrument / timeframe / bar_time are recoverable from the alert.
+        pa.triggerBar().ifPresent(b -> {
+            item.put("trigger_ha_open", n(b.haOpen().toPlainString()));
+            item.put("trigger_ha_high", n(b.haHigh().toPlainString()));
+            item.put("trigger_ha_low", n(b.haLow().toPlainString()));
+            item.put("trigger_ha_close", n(b.haClose().toPlainString()));
+        });
         item.put("retry_count", n(Integer.toString(pa.retryCount())));
         item.put("retry_at", s(pa.retryAt().toString()));
         item.put("last_error", AttributeValue.fromM(buildLastErrorMap(pa.lastError())));
@@ -162,9 +174,23 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
                 errMap.get("message").s(),
                 Instant.parse(errMap.get("ts").s()),
                 Optional.ofNullable(errMap.get("component")).map(AttributeValue::s));
+        StrategyAlert alert = StrategyAlertJson.fromJson(item.get("alert").s());
+        Optional<HABar> triggerBar = Optional.empty();
+        if (item.containsKey("trigger_ha_close")) {
+            triggerBar = Optional.of(new HABar(
+                    alert.instrumentId(),
+                    alert.timeframe(),
+                    alert.barTime(),
+                    new BigDecimal(item.get("trigger_ha_open").n()),
+                    new BigDecimal(item.get("trigger_ha_high").n()),
+                    new BigDecimal(item.get("trigger_ha_low").n()),
+                    new BigDecimal(item.get("trigger_ha_close").n()),
+                    alert.detectedAt()));
+        }
         return new PendingStrategyAlert(
                 item.get("event_uid").s(),
-                StrategyAlertJson.fromJson(item.get("alert").s()),
+                alert,
+                triggerBar,
                 Integer.parseInt(item.get("retry_count").n()),
                 Instant.parse(item.get("retry_at").s()),
                 err,

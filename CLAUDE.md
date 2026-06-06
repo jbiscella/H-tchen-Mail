@@ -259,10 +259,21 @@ strategy is treated as a render fault: the item is bumped like any chart failure
 and only on the final attempt (at the retry cap) does the poller send a
 chart-degraded email (SI-3c.3).
 
+The item additionally stores the **triggering HA bar's OHLC snapshot** (four
+decimals — instrument / timeframe / bar_time come from the alert). Under a
+`SNAPSHOT_ONLY` retention policy a later ingest can evict the triggering HA bar
+before the retry runs, so `findLastN` no longer contains `bar_time`; since the
+entry/exit marker must sit on a bar that is in the series (heerwisch V7), the
+poller **synthesizes the triggering bar from this snapshot** when it is missing,
+exactly as the legacy `HeerwischChartRenderer` does for `PatternEvent`. Without
+it a retried chart would needlessly degrade to chart-less. The snapshot is a
+handful of numbers, so it does not reintroduce the 400 KB item-size risk.
+
 | Attribute       | Type    | Required | Notes                                                                       |
 |-----------------|---------|----------|-----------------------------------------------------------------------------|
 | `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
 | `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
+| `trigger_ha_open/high/low/close` | Number | no | triggering HA bar OHLC snapshot, for V7-safe bar synthesis on retry (above) |
 | `retry_count`   | Number  | yes      | 0..3                                                                        |
 | `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
 | `last_error`    | Map      | yes      | `{ code, message, ts, component }`                                          |
@@ -479,8 +490,9 @@ Feature: Instrument Registry — Domain Operations
     Then a multi-step delete runs:
       | step | operation                                                                  |
       | 1    | Query sk begins_with "OHLC#" or "HA#" + paginated BatchWriteItem delete   |
-      | 2    | TransactWrite: DeleteItem META + CONFIG + UNIQUE_LOCK                      |
+      | 2    | TransactWrite: DeleteItem META + CONFIG + STRATEGY + UNIQUE_LOCK           |
     And no trace of the instrument remains
+    And the STRATEGY item (if any) is gone, so findByInstrumentId returns empty
 
   Scenario: Hard delete is idempotent
     Given "abc-123" was already deleted

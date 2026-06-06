@@ -3,6 +3,7 @@ package com.heikinashi.monitoring.domain;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * A strategy alert whose dispatch failed, queued for retry (CLAUDE.md §2
@@ -14,12 +15,19 @@ import java.util.Objects;
  * {@code Strategy} + bars rather than carrying a (potentially &gt;400 KB) PNG blob
  * in the row.
  *
+ * <p>{@code triggerBar} is the HA bar that fired the alert. Under
+ * {@code SNAPSHOT_ONLY} retention a later ingest can evict it before the retry
+ * runs, so the poller synthesizes it back into the series (heerwisch requires the
+ * entry/exit marker to sit on a bar that is present — V7); empty only for
+ * pending items written before this snapshot was added.
+ *
  * <p>Identified by a deterministic {@code eventUid =
  * <instrument_id>_<tf>_<bar_time>_strategy} so concurrent pollers see one item.
  */
 public record PendingStrategyAlert(
         String eventUid,
         StrategyAlert alert,
+        Optional<HABar> triggerBar,
         int retryCount,
         Instant retryAt,
         PendingAlert.LastError lastError,
@@ -28,13 +36,14 @@ public record PendingStrategyAlert(
     public PendingStrategyAlert {
         Objects.requireNonNull(eventUid, "eventUid");
         Objects.requireNonNull(alert, "alert");
+        Objects.requireNonNull(triggerBar, "triggerBar");
         Objects.requireNonNull(retryAt, "retryAt");
         Objects.requireNonNull(lastError, "lastError");
         Objects.requireNonNull(createdAt, "createdAt");
     }
 
     public PendingStrategyAlert bumped(Instant nextRetryAt, PendingAlert.LastError newError) {
-        return new PendingStrategyAlert(eventUid, alert, retryCount + 1, nextRetryAt, newError, createdAt);
+        return new PendingStrategyAlert(eventUid, alert, triggerBar, retryCount + 1, nextRetryAt, newError, createdAt);
     }
 
     public static String uidOf(StrategyAlert alert) {

@@ -54,8 +54,8 @@ import software.amazon.awssdk.services.dynamodb.model.WriteRequest;
  * are last-write-wins.
  *
  * <p>{@link #hardDelete(String)} is idempotent: it paginates through OHLC and
- * HA items deleting them in batches of 25, then deletes META + CONFIG + LOCK
- * via TransactWriteItems. Missing items are silently tolerated.
+ * HA items deleting them in batches of 25, then deletes META + CONFIG + STRATEGY
+ * + LOCK via TransactWriteItems. Missing items are silently tolerated.
  */
 @Singleton
 public class DynamoDbInstrumentRepository implements InstrumentRepository {
@@ -201,6 +201,15 @@ public class DynamoDbInstrumentRepository implements InstrumentRepository {
                             TransactWriteItem.builder()
                                     .delete(d -> d.tableName(tableConfig.getTableName())
                                             .key(Map.of("pk", s(pk), "sk", s(Keys.SK_CONFIG))))
+                                    .build(),
+                            // The STRATEGY item lives under INSTRUMENT#<id> too; without
+                            // this a deleted (or reused) id keeps a stale strategy that
+                            // would suppress legacy alerts / run old rules. Deleting an
+                            // absent item in a transaction is a no-op, so this stays
+                            // idempotent for instruments that never had a strategy.
+                            TransactWriteItem.builder()
+                                    .delete(d -> d.tableName(tableConfig.getTableName())
+                                            .key(Map.of("pk", s(pk), "sk", s(Keys.SK_STRATEGY))))
                                     .build(),
                             TransactWriteItem.builder()
                                     .delete(d -> d.tableName(tableConfig.getTableName())

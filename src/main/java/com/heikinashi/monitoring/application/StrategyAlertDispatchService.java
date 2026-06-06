@@ -103,21 +103,21 @@ public class StrategyAlertDispatchService {
         try {
             chart = chartRenderer.render(alert, strategy, bars);
         } catch (ChartRenderException | DependencyUnavailableException e) {
-            return enqueue(alert, "chart", e);
+            return enqueue(alert, bars, "chart", e);
         }
 
         AiAnalysis analysis;
         try {
             analysis = aiAnalyst.analyze(alert);
         } catch (LLMException | DependencyUnavailableException e) {
-            return enqueue(alert, "ai", e);
+            return enqueue(alert, bars, "ai", e);
         }
 
         List<EmailSender.DeliveryResult> deliveries;
         try {
             deliveries = emailSender.sendFull(alert, chart, analysis, recipients);
         } catch (DependencyUnavailableException e) {
-            return enqueue(alert, "email", e);
+            return enqueue(alert, bars, "email", e);
         }
 
         Set<String> delivered = new LinkedHashSet<>();
@@ -129,7 +129,7 @@ public class StrategyAlertDispatchService {
             }
         }
         if (delivered.isEmpty()) {
-            return enqueue(alert, "email", new DependencyUnavailableException("ses-all-rejected", null));
+            return enqueue(alert, bars, "email", new DependencyUnavailableException("ses-all-rejected", null));
         }
         if (auditEnabled) {
             auditRepo.recordSentStrategyAlert(alert, AlertEnrichment.FULL, delivered, messageIds, clock.instant());
@@ -137,13 +137,19 @@ public class StrategyAlertDispatchService {
         return DispatchSummary.empty().plusSent();
     }
 
-    private DispatchSummary enqueue(StrategyAlert alert, String component, RuntimeException cause) {
+    private DispatchSummary enqueue(StrategyAlert alert, List<HABar> bars, String component, RuntimeException cause) {
         // No chart is stored: the retry poller re-renders from the persisted
-        // Strategy + bars (CLAUDE.md §9 Component 1c SI-3c.3).
+        // Strategy + bars (CLAUDE.md §9 Component 1c SI-3c.3). We DO keep the
+        // triggering HA bar's snapshot so the retry can synthesize it back if
+        // retention evicts it before then (heerwisch V7 — marker must be on a
+        // bar in the series).
         Instant now = clock.instant();
+        Optional<HABar> triggerBar =
+                bars.stream().filter(b -> b.barTime().equals(alert.barTime())).findFirst();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),
                 alert,
+                triggerBar,
                 0,
                 now.plus(retryDelay),
                 new PendingAlert.LastError(
