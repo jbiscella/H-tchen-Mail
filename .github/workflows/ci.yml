@@ -9,8 +9,9 @@ on:
 
 permissions:
   contents: read
-  id-token: write       # OIDC federation to AWS
-  pull-requests: write  # terraform-plan PR comment
+  id-token: write         # OIDC federation to AWS
+  pull-requests: write    # terraform-plan PR comment
+  security-events: write  # upload Trivy SARIF to the code-scanning / Security tab
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -99,6 +100,72 @@ jobs:
           path: target/*.jar
           if-no-files-found: error
           retention-days: 7
+
+  # --- Security: dependency vulnerability scan (Trivy) ----------------------
+
+  security-scan:
+    name: trivy dependency scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'corretto'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      # Build the shaded jar (no tests) so Trivy sees the full *transitive*
+      # dependency set bundled inside it, not just the direct pom.xml entries —
+      # the screenshot vulns (commons-email2, micronaut transitives) live there.
+      - name: Package fat jar (skip tests)
+        run: mvn -B -ntp -DskipTests -Djacoco.skip=true package
+
+      # Report pass: every severity -> SARIF -> GitHub Security tab. Never fails
+      # the build (exit-code 0) and runs even if the gate below fails, so
+      # unfixable advisories stay visible without blocking CI.
+      - name: Trivy scan (SARIF, all severities)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: target
+          scanners: vuln
+          format: sarif
+          output: trivy-results.sarif
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-dependencies
+
+      # Gate pass: fail the build on HIGH/CRITICAL that HAVE a released fix.
+      # `ignore-unfixed: true` keeps CI green on advisories with no upstream fix
+      # yet (e.g. milestone deps) while still blocking actionable upgrades.
+      - name: Trivy gate (fail on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: target
+          scanners: vuln
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
   # --- Terraform: fmt + validate (always) -----------------------------------
 
