@@ -32,14 +32,6 @@ Feature: SI-3c.3 — Strategy alert retry
     And a full strategy email is sent to "alice@example.com"
     And the strategy pending alert is deleted
 
-  Scenario: Retry renders from the strategy that fired, not the live re-imported one
-    Given a strategy is persisted for the instrument
-    And a strategy pending alert is queued with retry_count 0 due now carrying strategy snapshot "fired-strategy"
-    When the strategy retry poller runs
-    Then the re-rendered chart used strategy "fired-strategy"
-    And a full strategy email is sent to "alice@example.com"
-    And the strategy pending alert is deleted
-
   Scenario: Retry restores the trigger bar evicted by retention so the chart still renders
     Given a strategy is persisted for the instrument
     And a strategy pending alert is queued with retry_count 0 due now carrying its trigger bar

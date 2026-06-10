@@ -6,10 +6,8 @@ import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.Timeframe;
-import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
-import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -50,9 +48,6 @@ class DynamoDbPendingStrategyAlertRepositoryIT extends LocalStackITBase {
         assertThat(loaded.triggerBar()).isPresent();
         assertThat(loaded.triggerBar().get().haClose()).isEqualByComparingTo(new BigDecimal("105"));
         assertThat(loaded.triggerBar().get().barTime()).isEqualTo(loaded.alert().barTime());
-        assertThat(loaded.strategy()).isPresent();
-        assertThat(loaded.strategy().get().name()).isEqualTo("rsi-reversal-long");
-        assertThat(loaded.strategy().get().scenarios().get(0).conditions()).containsExactly("rsi(14) crosses below 30");
     }
 
     @Test
@@ -118,19 +113,9 @@ class DynamoDbPendingStrategyAlertRepositoryIT extends LocalStackITBase {
                 new BigDecimal("95"),
                 new BigDecimal("105"),
                 alert.detectedAt());
-        Strategy strategy = new Strategy(
-                "rsi-reversal-long",
-                List.of(new StrategyScenario(
-                        "oversold-entry",
-                        "long_entry",
-                        List.of("rsi(14) crosses below 30"),
-                        Optional.empty(),
-                        Optional.empty(),
-                        Optional.empty())));
         return new PendingStrategyAlert(
                 uid(),
                 alert,
-                Optional.of(strategy),
                 Optional.of(triggerBar),
                 retryCount,
                 retryAt,
