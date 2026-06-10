@@ -2768,6 +2768,25 @@ is, why it's deferred, and when/how to address it.
    *To address*: add a `version` attribute and a `ConditionExpression` on the
    `UpdateItem` if/when a multi-writer UI makes concurrent edits likely.
 
+5. **Purge pending retries when a strategy is changed/removed.** A queued
+   `STRATEGY_PENDING_ALERT` belongs to the strategy that fired it; if the strategy
+   is re-imported, edited, or deleted before the retry runs, the in-flight retry is
+   stale. The desired behaviour is to drop the instrument's pending retries on that
+   change. *Why deferred*: (a) there is **no in-app strategy change/remove
+   operation** to hook today — strategies are loaded out-of-band and
+   `StrategyRepository` is read-only (the `mon` management CLI is planned, not
+   built), the only removal being full instrument hard-delete; (b) pending retries
+   are **not indexed by instrument** (pk = `STRATEGY_PENDING_ALERT#<event_uid>`, the
+   only GSI is by `retry_at`), so finding an instrument's retries needs a scan or a
+   new index; (c) it is **self-limiting** — a pending retry lives only ~3 attempts
+   (~hours) before it expires, so the worst case is one slightly-stale email. A
+   snapshot-the-firing-strategy fix was built and **reverted** as over-engineered
+   for a rare, self-correcting case. *To address*: add
+   `PendingStrategyAlertRepository.deleteByInstrumentId` (with an instrument-keyed
+   access path) and call it from the strategy import/delete flow **when that
+   command is built** — it is the natural owner of this cleanup, and also lets
+   instrument hard-delete drop orphaned pending retries.
+
 ### From code (TODO/FIXME)
 
 - (none currently)
