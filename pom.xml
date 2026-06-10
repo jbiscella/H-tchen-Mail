@@ -40,9 +40,10 @@
              managed versions via the properties its BOMs interpolate (a child
              BOM import cannot override a parent's managed versions, but a child
              property override can). core 4.10.22: CVE-2026-44241 / CVE-2026-33013;
-             netty 4.2.13.Final: CVE-2026-42583/33870/42584/42587/33871. -->
+             netty 4.2.15.Final: CVE-2026-42583/33870/42584/42587/33871 and the
+             later CVE-2026-44249 / CVE-2026-45416 (netty-handler). -->
         <micronaut.core.version>4.10.22</micronaut.core.version>
-        <netty.version>4.2.13.Final</netty.version>
+        <netty.version>4.2.15.Final</netty.version>
 
         <!--
             ha-track: shared Heikin Ashi kernel + libraries, published to Maven
@@ -74,7 +75,7 @@
                 Security pins (Trivy CI gate). The Micronaut parent pins these
                 Netty artifacts literally at 4.2.12 (the netty.version property
                 only drives the rest), so explicit child entries are needed to
-                lift them to 4.2.13.Final and keep the whole Netty graph aligned.
+                lift them to 4.2.15.Final and keep the whole Netty graph aligned.
                 Fixes CVE-2026-42583/33870/42584/42587/33871 in netty-codec*.
                 Revisit when the Micronaut platform parent is bumped past 4.10.0.
             -->
