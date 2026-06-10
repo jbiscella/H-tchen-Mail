@@ -16,7 +16,6 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
     private final Deque<RuntimeException> scriptedFailures = new ArrayDeque<>();
     private int callCount;
     private List<HABar> lastBars = List.of();
-    private Strategy lastStrategy;
 
     public void failNext(int n) {
         for (int i = 0; i < n; i++) {
@@ -33,16 +32,10 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
         return lastBars;
     }
 
-    /** The strategy passed to the most recent render call (for retry snapshot-fidelity assertions). */
-    public Strategy lastStrategy() {
-        return lastStrategy;
-    }
-
     @Override
     public ChartImage render(StrategyAlert alert, Strategy strategy, List<HABar> bars) {
         callCount++;
         lastBars = List.copyOf(bars);
-        lastStrategy = strategy;
         RuntimeException next = scriptedFailures.pollFirst();
         if (next != null) {
             throw next;

@@ -250,22 +250,14 @@ strategy for the same instrument overwrites the single STRATEGY item.
 
 A failed **strategy** dispatch (Component 1c, SI-3c.3) queues here instead of the
 `PENDING_ALERT` partition, because a strategy alert is not a `PatternEvent`. The
-item stores **only the alert + retry bookkeeping + the firing strategy snapshot —
-never the chart**: OHLC/HA bars are readable by count (`findLastN`), so the retry
-poller **re-renders the chart** from `Strategy` + bars rather than carrying a
-(potentially >400 KB) PNG blob in the row.
-
-The pending item stores a **snapshot of the strategy that fired** (its scenarios +
-conditions, captured at enqueue), and the retry renders from that snapshot — NOT
-from the live `STRATEGY` item. An alert is a record of what triggered at a moment
-in time; if the strategy is re-imported, edited, or deleted between detection and
-retry, reloading the live item would draw a chart for *different* rules than the
-ones the stored alert describes (picture and text disagreeing). Rendering from the
-snapshot keeps the retry faithful, and means a deleted/changed live strategy no
-longer degrades the retry. (Legacy pending items written before the snapshot
-existed carry none: they fall back to reloading the live `STRATEGY` item and, if
-it is gone, chart-degrade on the final attempt as before.) The strategy is small
-JSON, so it does not reintroduce the 400 KB item-size risk.
+item stores **only the alert + retry bookkeeping — never the chart**: because the
+strategy is itself persisted (the `STRATEGY` item) and OHLC/HA bars are readable
+by count (`findLastN`), the retry poller **re-renders the chart** from the
+persisted `Strategy` + bars rather than carrying a (potentially >400 KB) PNG blob
+in the row. If the strategy was deleted between detection and retry, the missing
+strategy is treated as a render fault: the item is bumped like any chart failure,
+and only on the final attempt (at the retry cap) does the poller send a
+chart-degraded email (SI-3c.3).
 
 The item additionally stores the **triggering HA bar's OHLC snapshot** (four
 decimals — instrument / timeframe / bar_time come from the alert). Under a
@@ -281,7 +273,6 @@ handful of numbers, so it does not reintroduce the 400 KB item-size risk.
 |-----------------|---------|----------|-----------------------------------------------------------------------------|
 | `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
 | `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
-| `strategy`      | String  | no       | snapshot of the firing strategy JSON (scenarios + conditions); retry renders from this, not the live STRATEGY item (above). Absent only on legacy pre-snapshot items |
 | `trigger_ha_open/high/low/close` | Number | no | triggering HA bar OHLC snapshot, for V7-safe bar synthesis on retry (above) |
 | `retry_count`   | Number  | yes      | 0..3                                                                        |
 | `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
