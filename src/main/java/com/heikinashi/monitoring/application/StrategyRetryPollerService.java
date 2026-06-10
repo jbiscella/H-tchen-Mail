@@ -39,12 +39,14 @@ import org.slf4j.LoggerFactory;
  * SI-3c.3 — retry poller for strategy alerts (CLAUDE.md §9 Component 1c).
  *
  * <p>Mirrors {@link RetryPollerService} but over the {@code STRATEGY_PENDING_ALERT}
- * partition. The queued item carries no chart: per due item the poller reloads the
- * persisted {@link Strategy} + HA bars and <b>re-renders</b> the chart (falling
- * back to chart-degraded if the strategy is gone or render still fails), re-runs
- * the AI analyst from the stored alert, then sends. On success it records the audit
- * item and deletes; under the cap it bumps; at the cap it sends a degraded email
- * and deletes. All recipients rejected on the final attempt drops the poison item.
+ * partition. The queued item carries no chart but DOES carry a snapshot of the
+ * firing {@link Strategy} + the triggering bar: per due item the poller
+ * <b>re-renders</b> the chart from that snapshot + HA bars (so a strategy
+ * re-imported/deleted since detection cannot change the retried chart), re-runs
+ * the AI analyst from the stored alert, then sends. On success it deletes the item
+ * then records the audit (best-effort); under the cap it bumps; at the cap it
+ * sends a degraded email and deletes. All recipients rejected on the final attempt
+ * drops the poison item.
  */
 @Singleton
 public class StrategyRetryPollerService {
@@ -144,13 +146,17 @@ public class StrategyRetryPollerService {
     }
 
     /**
-     * Re-render the chart from the persisted strategy + bars. Empty when the
-     * strategy was deleted since detection, or the render still fails (the send is
-     * then chart-degraded).
+     * Re-render the chart from the snapshot of the firing strategy + bars. Empty
+     * only for a legacy pending with no snapshot whose live strategy is also gone,
+     * or when the render still fails (the send is then chart-degraded).
      */
     private Optional<ChartImage> reRenderChart(PendingStrategyAlert pending) {
         StrategyAlert alert = pending.alert();
-        Optional<Strategy> strategy = strategies.findByInstrumentId(alert.instrumentId());
+        // Render from the snapshot of the strategy that FIRED (captured at enqueue),
+        // not the live STRATEGY item, which may have been edited/deleted since — the
+        // retried chart must match the rules the stored alert describes (SI-3c.3).
+        // Legacy pendings carry no snapshot: fall back to the live item.
+        Optional<Strategy> strategy = pending.strategy().or(() -> strategies.findByInstrumentId(alert.instrumentId()));
         if (strategy.isEmpty()) {
             LOG.warn(
                     "strategy_retry_no_strategy instrument_id={} bar_time={} (chart-degraded)",

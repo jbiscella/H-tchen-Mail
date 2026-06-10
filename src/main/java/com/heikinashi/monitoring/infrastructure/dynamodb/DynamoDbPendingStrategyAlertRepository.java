@@ -4,6 +4,7 @@ import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
@@ -138,6 +139,9 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
         item.put("entity", s(Keys.ENTITY_STRATEGY_PENDING_ALERT));
         item.put("event_uid", s(pa.eventUid()));
         item.put("alert", s(StrategyAlertJson.toJson(pa.alert())));
+        // Snapshot of the strategy that fired, so the retry renders the rules that
+        // actually triggered even if the live STRATEGY item changed (CLAUDE.md §2).
+        pa.strategy().ifPresent(st -> item.put("strategy", s(StrategyJson.toJson(st))));
         // Triggering HA bar OHLC snapshot, so the retry can synthesize it back if
         // retention evicts the bar before then (CLAUDE.md §2 / Component 1c).
         // instrument / timeframe / bar_time are recoverable from the alert.
@@ -175,6 +179,9 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
                 Instant.parse(errMap.get("ts").s()),
                 Optional.ofNullable(errMap.get("component")).map(AttributeValue::s));
         StrategyAlert alert = StrategyAlertJson.fromJson(item.get("alert").s());
+        Optional<Strategy> strategy = item.containsKey("strategy")
+                ? Optional.of(StrategyJson.fromJson(item.get("strategy").s()))
+                : Optional.empty();
         Optional<HABar> triggerBar = Optional.empty();
         if (item.containsKey("trigger_ha_close")) {
             triggerBar = Optional.of(new HABar(
@@ -190,6 +197,7 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
         return new PendingStrategyAlert(
                 item.get("event_uid").s(),
                 alert,
+                strategy,
                 triggerBar,
                 Integer.parseInt(item.get("retry_count").n()),
                 Instant.parse(item.get("retry_at").s()),

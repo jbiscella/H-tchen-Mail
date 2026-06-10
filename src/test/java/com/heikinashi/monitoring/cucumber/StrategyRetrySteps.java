@@ -79,7 +79,7 @@ public class StrategyRetrySteps {
 
     @Given("a strategy pending alert is queued with retry_count {int} due now")
     public void a_strategy_pending_alert_is_queued(int retryCount) {
-        enqueuePending(retryCount, Optional.empty());
+        enqueuePending(retryCount, Optional.empty(), Optional.empty());
     }
 
     @Given("a strategy pending alert is queued with retry_count {int} due now carrying its trigger bar")
@@ -97,14 +97,28 @@ public class StrategyRetrySteps {
                 new BigDecimal("95"),
                 new BigDecimal("105"),
                 alert.detectedAt());
-        enqueuePending(retryCount, Optional.of(trigger));
+        enqueuePending(retryCount, Optional.empty(), Optional.of(trigger));
     }
 
-    private void enqueuePending(int retryCount, Optional<HABar> triggerBar) {
+    @Given("a strategy pending alert is queued with retry_count {int} due now carrying strategy snapshot {string}")
+    public void a_strategy_pending_alert_is_queued_carrying_strategy_snapshot(int retryCount, String snapshotName) {
+        StrategyScenario scenario = new StrategyScenario(
+                "snap-entry",
+                "long_entry",
+                List.of("rsi(14) crosses below 25"),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+        Strategy snapshot = new Strategy(snapshotName, List.of(scenario));
+        enqueuePending(retryCount, Optional.of(snapshot), Optional.empty());
+    }
+
+    private void enqueuePending(int retryCount, Optional<Strategy> strategy, Optional<HABar> triggerBar) {
         StrategyAlert alert = seedAlert();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),
                 alert,
+                strategy,
                 triggerBar,
                 retryCount,
                 world.now(),
@@ -140,6 +154,12 @@ public class StrategyRetrySteps {
     @Then("the strategy chart is re-rendered from the persisted strategy")
     public void the_strategy_chart_is_re_rendered() {
         assertThat(world.strategyChartRenderer().callCount()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Then("the re-rendered chart used strategy {string}")
+    public void the_re_rendered_chart_used_strategy(String name) {
+        assertThat(world.strategyChartRenderer().lastStrategy()).isNotNull();
+        assertThat(world.strategyChartRenderer().lastStrategy().name()).isEqualTo(name);
     }
 
     @Then("the re-rendered chart includes the trigger bar")
