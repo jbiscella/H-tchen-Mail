@@ -113,6 +113,11 @@ public class StrategyRetrySteps {
         world.pendingStrategyAlerts().enqueue(pending);
     }
 
+    @Given("the audit write will fail")
+    public void the_audit_write_will_fail() {
+        world.auditRepo().failNextWrite();
+    }
+
     @When("the strategy retry poller runs")
     public void the_strategy_retry_poller_runs() {
         pollResult = world.strategyRetryPollerService().processBatch();
@@ -170,5 +175,13 @@ public class StrategyRetrySteps {
                 world.pendingStrategyAlerts().findByUid(PendingStrategyAlert.uidOf(world.currentStrategyAlert()));
         assertThat(pending).isPresent();
         assertThat(pending.get().retryCount()).isEqualTo(n);
+    }
+
+    @Then("the strategy pending alert last_error component is {string}")
+    public void the_strategy_pending_alert_last_error_component_is(String component) {
+        Optional<PendingStrategyAlert> pending =
+                world.pendingStrategyAlerts().findByUid(PendingStrategyAlert.uidOf(world.currentStrategyAlert()));
+        assertThat(pending).isPresent();
+        assertThat(pending.get().lastError().componentFailed()).contains(component);
     }
 }
