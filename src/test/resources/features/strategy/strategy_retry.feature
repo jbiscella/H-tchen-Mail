@@ -47,6 +47,24 @@ Feature: SI-3c.3 — Strategy alert retry
     Then a degraded strategy email is sent without a chart
     And the strategy pending alert is deleted
 
+  Scenario: A mail outage on retry is recorded against the email component, not AI
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    And the email sender is unavailable
+    When the strategy retry poller runs
+    Then no strategy email is sent
+    And the strategy pending alert retry_count is 1
+    And the strategy pending alert last_error component is "email"
+
+  Scenario: An audit-write failure after a successful retry send still deletes the pending
+    Given audit logging is enabled
+    And a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    And the audit write will fail
+    When the strategy retry poller runs
+    Then a full strategy email is sent to "alice@example.com"
+    And the strategy pending alert is deleted
+
   Scenario: A transient failure under the cap bumps the retry count
     Given a strategy is persisted for the instrument
     And a strategy pending alert is queued with retry_count 0 due now

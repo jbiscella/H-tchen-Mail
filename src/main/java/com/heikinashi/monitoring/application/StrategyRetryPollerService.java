@@ -207,7 +207,10 @@ public class StrategyRetryPollerService {
                 deliveries = emailSender.sendFull(alert, chart.get(), analysis.get(), recipients);
             }
         } catch (DependencyUnavailableException e) {
-            return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
+            // The mail send itself failed (chart + AI already succeeded); record it
+            // against the email/SES dependency, not AI, so backlog diagnostics point
+            // at the right thing.
+            return bumpRetry(pending, e.code(), "email", result);
         }
 
         Set<String> delivered = new LinkedHashSet<>();
@@ -233,13 +236,24 @@ public class StrategyRetryPollerService {
                         pending.retryCount());
                 return result; // dropped (not sent, not requeued); already counted as processed
             }
-            return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
+            return bumpRetry(pending, "SES_REJECTED", "email", result);
         }
 
-        if (auditEnabled) {
-            auditRepo.recordSentStrategyAlert(alert, enrichment, delivered, messageIds, clock.instant());
-        }
+        // Delete BEFORE auditing: the email is already delivered, so the pending
+        // must not survive a transient audit-write failure (it would be retried and
+        // re-send a duplicate). Audit is best-effort and never blocks the delete.
         pendingAlerts.delete(pending.eventUid());
+        if (auditEnabled) {
+            try {
+                auditRepo.recordSentStrategyAlert(alert, enrichment, delivered, messageIds, clock.instant());
+            } catch (RuntimeException e) {
+                LOG.error(
+                        "strategy_retry_audit_failed instrument_id={} bar_time={} (email already sent, pending deleted)",
+                        alert.instrumentId(),
+                        alert.barTime(),
+                        e);
+            }
+        }
         if (degraded) {
             LOG.info(
                     "strategy_retry_sent_degraded instrument_id={} bar_time={} enrichment={}",
@@ -251,17 +265,21 @@ public class StrategyRetryPollerService {
         return result.plusSentFull();
     }
 
+    // Bump for a chart/AI re-render failure (derives the code/component from which
+    // stage failed). SES failures use the explicit overload below so a mail outage
+    // is not mislabeled as an AI failure in retry diagnostics.
     private PollResult bumpRetry(
             PendingStrategyAlert pending, boolean chartFailed, boolean aiFailed, PollResult result) {
-        Instant now = clock.instant();
         String component = chartFailed && aiFailed ? "chart+ai" : (chartFailed ? "chart" : "ai");
+        String code = chartFailed ? "CHART_RENDER_FAILED" : "LLM_ERROR";
+        return bumpRetry(pending, code, component, result);
+    }
+
+    private PollResult bumpRetry(PendingStrategyAlert pending, String code, String component, PollResult result) {
+        Instant now = clock.instant();
         PendingStrategyAlert next = pending.bumped(
                 now.plus(retryDelay),
-                new PendingAlert.LastError(
-                        chartFailed ? "CHART_RENDER_FAILED" : "LLM_ERROR",
-                        "transient failure on " + component,
-                        now,
-                        Optional.of(component)));
+                new PendingAlert.LastError(code, "transient failure on " + component, now, Optional.of(component)));
         boolean accepted = pendingAlerts.bumpRetry(next, pending.retryCount());
         if (!accepted) {
             LOG.info(

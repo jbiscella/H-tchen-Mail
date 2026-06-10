@@ -1503,7 +1503,18 @@ caught by dispatch / poller and enqueued / bumped instead of escaping. A
 `ALERT` audit item (§2) via `AlertAuditRepository.recordSentStrategyAlert`, reusing
 the legacy `ALERT` shape with `pattern = "strategy"`, `subtype = <strategy name>`,
 the delivered recipients, SES message-IDs, and enrichment — so strategy sends
-appear in the same compliance history as legacy alerts.
+appear in the same compliance history as legacy alerts. On the **retry** path the
+audit write is **best-effort and happens AFTER the pending item is deleted**: the
+email is already delivered, so a transient audit-write failure must not leave the
+pending item to be retried and re-send a duplicate. A failed audit write is logged
+and swallowed, never resurfacing the alert.
+
+**Retry failure attribution.** When a retry bumps the pending item, `last_error`
+names the dependency that actually failed: a chart re-render failure →
+`component = chart`, an AI failure → `ai`, and a **mail-send failure (SES
+unavailable, or all recipients rejected) → `email`** — so retry-backlog
+diagnostics and alarms point at the right dependency rather than mislabeling a
+mail outage as an AI failure.
 
 **Handler isolation.** The `retry-poller` Lambda (§10) runs **both** queues each
 tick, each in its own guarded block: a runtime failure draining the legacy
@@ -2133,6 +2144,7 @@ CLI uses AWS SDK v2 directly against DynamoDB / Lambda. No HTTP API.
 | Tool                | Terraform                                           |
 | Environments        | single (`prod`)                                     |
 | Apply               | GitHub Actions on push to `main` (OIDC)             |
+| Deploy gate         | `mvn verify`, `terraform validate`, **and the Trivy `security-scan`** (a fixable HIGH/CRITICAL dependency vuln blocks the deploy chain via `aws-preflight-pre`'s `needs`) |
 | State backend       | S3 (versioning + encryption) + DynamoDB lock        |
 | Region (compute)    | `eu-central-1`                                      |
 | Region (SES)        | `eu-central-1`                                      |

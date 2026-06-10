@@ -319,7 +319,9 @@ jobs:
   aws-preflight-pre:
     name: aws preflight pre-apply (Bedrock + SES)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
-    needs: [verify, terraform-validate]
+    # security-scan gates the whole deploy chain (terraform-apply -> deploy-lambda
+    # all transit through this job): a fixable HIGH/CRITICAL must block the deploy.
+    needs: [verify, terraform-validate, security-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
