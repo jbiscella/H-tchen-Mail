@@ -1,5 +1,6 @@
 package com.heikinashi.monitoring.domain;
 
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import java.time.Instant;
 import java.util.Objects;
@@ -27,6 +28,7 @@ import java.util.Optional;
 public record PendingStrategyAlert(
         String eventUid,
         StrategyAlert alert,
+        Optional<Strategy> strategy,
         Optional<HABar> triggerBar,
         int retryCount,
         Instant retryAt,
@@ -36,6 +38,7 @@ public record PendingStrategyAlert(
     public PendingStrategyAlert {
         Objects.requireNonNull(eventUid, "eventUid");
         Objects.requireNonNull(alert, "alert");
+        Objects.requireNonNull(strategy, "strategy");
         Objects.requireNonNull(triggerBar, "triggerBar");
         Objects.requireNonNull(retryAt, "retryAt");
         Objects.requireNonNull(lastError, "lastError");
@@ -43,7 +46,8 @@ public record PendingStrategyAlert(
     }
 
     public PendingStrategyAlert bumped(Instant nextRetryAt, PendingAlert.LastError newError) {
-        return new PendingStrategyAlert(eventUid, alert, triggerBar, retryCount + 1, nextRetryAt, newError, createdAt);
+        return new PendingStrategyAlert(
+                eventUid, alert, strategy, triggerBar, retryCount + 1, nextRetryAt, newError, createdAt);
     }
 
     public static String uidOf(StrategyAlert alert) {
