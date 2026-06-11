@@ -51,7 +51,7 @@
             wichtelm-app consumes so the two tools share one canonical kernel.
             Packages are org.hatrack.* (commons/nachtkrapp/frauholle/heerwisch).
         -->
-        <hatrack.version>0.56.0-alpha</hatrack.version>
+        <hatrack.version>0.57.0-alpha</hatrack.version>
         <commons.email.version>2.0.0-M1</commons.email.version>
         <logstash.encoder.version>8.0</logstash.encoder.version>
 

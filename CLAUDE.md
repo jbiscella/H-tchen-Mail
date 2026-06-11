@@ -259,21 +259,24 @@ strategy is treated as a render fault: the item is bumped like any chart failure
 and only on the final attempt (at the retry cap) does the poller send a
 chart-degraded email (SI-3c.3).
 
-The item additionally stores the **triggering HA bar's OHLC snapshot** (four
-decimals — instrument / timeframe / bar_time come from the alert). Under a
-`SNAPSHOT_ONLY` retention policy a later ingest can evict the triggering HA bar
-before the retry runs, so `findLastN` no longer contains `bar_time`; since the
-entry/exit marker must sit on a bar that is in the series (heerwisch V7), the
-poller **synthesizes the triggering bar from this snapshot** when it is missing,
-exactly as the legacy `HeerwischChartRenderer` does for `PatternEvent`. Without
-it a retried chart would needlessly degrade to chart-less. The snapshot is a
-handful of numbers, so it does not reintroduce the 400 KB item-size risk.
+The item additionally stores the **triggering raw OHLC bar's snapshot** (four
+decimals — instrument / timeframe / bar_time come from the alert). The strategy
+chart is rendered from the raw `OHLCSeries` (heerwisch draws Heikin-Ashi candle
+bodies via `CandleStyle.HEIKIN_ASHI`, §9 Component 1b), so the snapshot is the
+raw OHLC, not Heikin-Ashi. Under a `SNAPSHOT_ONLY` retention policy a later
+ingest can evict the triggering raw bar before the retry runs (raw OHLC and HA
+share the same TTL), so `OhlcRepository.findLastN` no longer contains `bar_time`;
+since the entry/exit marker must sit on a bar that is in the series (heerwisch
+V7), the poller **synthesizes the triggering bar from this snapshot** when it is
+missing. Without it a retried chart would needlessly degrade to chart-less. The
+snapshot is a handful of numbers, so it does not reintroduce the 400 KB item-size
+risk.
 
 | Attribute       | Type    | Required | Notes                                                                       |
 |-----------------|---------|----------|-----------------------------------------------------------------------------|
 | `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
 | `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
-| `trigger_ha_open/high/low/close` | Number | no | triggering HA bar OHLC snapshot, for V7-safe bar synthesis on retry (above) |
+| `trigger_ohlc_open/high/low/close` | Number | no | triggering raw OHLC bar snapshot, for V7-safe bar synthesis on retry (above) |
 | `retry_count`   | Number  | yes      | 0..3                                                                        |
 | `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
 | `last_error`    | Map      | yes      | `{ code, message, ts, component }`                                          |
@@ -1297,18 +1300,36 @@ explains the rule that fired — only the relevant diagrams, nothing else.
 Derivation is **exclusive** and mirrors wichtelm-app's `HtmlReportGenerator`
 (indicator references found by scanning the condition strings for `name(args)`
 calls — `dsl-eval` exposes no referenced-indicator API), mapped to
-`Indicator.*` on `PriceSource.HA_CLOSE`:
+`Indicator.*` on **`PriceSource.CLOSE`** (the raw price, NOT Heikin-Ashi):
 
 | condition references                                                            | → heerwisch Indicator                                            | pane    |
 |---------------------------------------------------------------------------------|------------------------------------------------------------------|---------|
-| `rsi(p)` / `rsi_overbought(t)` / `rsi_oversold(t)` / `rsi_crosses_50()`         | `RSI(p, ob, os, HA_CLOSE, DANGER_ZONES_ON)` (Tier-B → period 14, thresholds threaded) | SUBPLOT |
-| `macd_line/signal/histogram(f,s,sig)` / `macd_*_cross()` / `macd_zero_cross_*()`| `MACD(f,s,sig, HA_CLOSE)` (Tier-B → 12/26/9)                      | SUBPLOT |
-| `sma(p)` / `price_*_sma(p)` / `sma_*_ema(sp,ep)`                                 | `SMA(p, HA_CLOSE)` (+ `EMA(ep)` for the MA-vs-MA forms)           | MAIN    |
-| `ema(p)` / `price_*_ema(p)`                                                      | `EMA(p, HA_CLOSE)`                                                | MAIN    |
+| `rsi(p)` / `rsi_overbought(t)` / `rsi_oversold(t)` / `rsi_crosses_50()`         | `RSI(p, ob, os, CLOSE, DANGER_ZONES_ON)` (Tier-B → period 14, thresholds threaded) | SUBPLOT |
+| `macd_line/signal/histogram(f,s,sig)` / `macd_*_cross()` / `macd_zero_cross_*()`| `MACD(f,s,sig, CLOSE)` (Tier-B → 12/26/9)                         | SUBPLOT |
+| `sma(p)` / `price_*_sma(p)` / `sma_*_ema(sp,ep)`                                 | `SMA(p, CLOSE)` (+ `EMA(ep)` for the MA-vs-MA forms)             | MAIN    |
+| `ema(p)` / `price_*_ema(p)`                                                      | `EMA(p, CLOSE)`                                                   | MAIN    |
 | `atr(p)`                                                                         | `ATR(p)`                                                          | SUBPLOT |
-| `stddev(p)`                                                                      | `StdDev(p, HA_CLOSE)`                                             | SUBPLOT |
-| `highest_high/lowest_low/highest_close/lowest_close(p)`                          | `RollingMax/Min(p, …)`                                            | MAIN    |
+| `stddev(p)`                                                                      | `StdDev(p, CLOSE)`                                                | SUBPLOT |
+| `highest_high(p)` / `lowest_low(p)`                                              | `RollingMax(p, HIGH)` / `RollingMin(p, LOW)`                      | MAIN    |
+| `highest_close(p)` / `lowest_close(p)`                                           | `RollingMax(p, CLOSE)` / `RollingMin(p, CLOSE)`                   | MAIN    |
 | `ha_*` primitives (doji / strong / reversal)                                     | none (already the HA candles)                                     | —       |
+
+**Heikin-Ashi candles + real-close indicators (ha-track 0.57).** The chart is
+built from the instrument's **raw `OHLCSeries`** with
+`ChartSpecBuilder.withCandleStyle(CandleStyle.HEIKIN_ASHI)`: heerwisch computes
+Heikin-Ashi for the **candle bodies only** (display), while the indicators are
+computed on the raw series — `PriceSource.CLOSE`. This is required for the chart
+to *justify the rule*: the rule engine (`DslConditionEvaluator`) evaluates every
+Tier-A indicator (`rsi`/`sma`/`ema`/`macd`/`stddev`, `highest_*`/`lowest_*`) on
+raw OHLC, never on Heikin-Ashi values. Drawing the overlays on HA close (the
+pre-0.57 behaviour, which fed heerwisch an `HASeries` and was forced to
+`HA_CLOSE` by heerwisch's V5 invariant) made the chart contradict the alert: an
+RSI computed on smoothed HA closes need not cross the threshold the rule named
+on the raw close. `CandleStyle.HEIKIN_ASHI` (added in heerwisch 0.57) decouples
+candle style from indicator price source, so the candles stay Heikin-Ashi while
+the indicators read the real close exactly as the rule evaluated them. The
+window-aggregate channels read raw `HIGH` / `LOW` / `CLOSE` to match
+`highest_high` / `lowest_low` / `highest_close` / `lowest_close`.
 
 Indicators are de-duplicated by `indicator.toString()`; an indicator referenced
 by several scenarios is drawn once.
@@ -1327,7 +1348,9 @@ Increments:
 derived from each matched line's `role`, following wichtelm's capital-flow
 matrix. This is a *display* mapping only — the role stays verbatim in the email
 text (Block 16) and is never used for a trade decision. An unrecognized role
-falls back to a neutral `Annotation.BarHighlight` at `bar_time, ha_close`.
+falls back to a neutral `Annotation.BarHighlight` at `bar_time, close` (raw
+close; the chart is built from the raw `OHLCSeries`, with Heikin-Ashi candle
+bodies drawn by `CandleStyle.HEIKIN_ASHI` — §9 Component 1b).
 
 | role          | `MarkerDirection` | `GlyphStyle`    |
 |---------------|-------------------|-----------------|
