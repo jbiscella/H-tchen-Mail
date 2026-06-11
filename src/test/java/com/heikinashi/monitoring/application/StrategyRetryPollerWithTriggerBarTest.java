@@ -2,7 +2,7 @@ package com.heikinashi.monitoring.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -26,36 +26,36 @@ class StrategyRetryPollerWithTriggerBarTest {
     @Test
     void splices_the_trigger_bar_back_in_ascending_order_when_evicted() {
         // Arrange: lookback no longer contains the alert bar at T2.
-        List<HABar> bars = List.of(bar(T0), bar(T1));
-        HABar trigger = bar(T2);
+        List<OHLCBar> bars = List.of(bar(T0), bar(T1));
+        OHLCBar trigger = bar(T2);
 
         // Act
-        List<HABar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.of(trigger));
+        List<OHLCBar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.of(trigger));
 
         // Assert: T2 restored, strictly ascending (heerwisch V3/V4/V7).
-        assertThat(result).extracting(HABar::barTime).containsExactly(T0, T1, T2);
+        assertThat(result).extracting(OHLCBar::barTime).containsExactly(T0, T1, T2);
     }
 
     @Test
     void returns_input_unchanged_when_the_bar_is_already_present() {
-        List<HABar> bars = List.of(bar(T0), bar(T1), bar(T2));
+        List<OHLCBar> bars = List.of(bar(T0), bar(T1), bar(T2));
 
-        List<HABar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.of(bar(T2)));
+        List<OHLCBar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.of(bar(T2)));
 
         assertThat(result).isSameAs(bars); // no copy, no duplicate
     }
 
     @Test
     void returns_input_unchanged_when_no_snapshot_was_kept() {
-        List<HABar> bars = List.of(bar(T0), bar(T1));
+        List<OHLCBar> bars = List.of(bar(T0), bar(T1));
 
-        List<HABar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.empty());
+        List<OHLCBar> result = StrategyRetryPollerService.withTriggerBar(bars, T2, Optional.empty());
 
         assertThat(result).isSameAs(bars);
     }
 
-    private static HABar bar(Instant at) {
-        return new HABar(
+    private static OHLCBar bar(Instant at) {
+        return new OHLCBar(
                 "abc-123",
                 Timeframe.D1,
                 at,
@@ -63,6 +63,8 @@ class StrategyRetryPollerWithTriggerBarTest {
                 new BigDecimal("110"),
                 new BigDecimal("95"),
                 new BigDecimal("105"),
+                Optional.empty(),
+                "test",
                 at);
     }
 }

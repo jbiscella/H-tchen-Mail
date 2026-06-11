@@ -8,10 +8,10 @@ import com.heikinashi.monitoring.domain.AlertAuditRepository;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.EmailSender;
-import com.heikinashi.monitoring.domain.HABar;
-import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
+import com.heikinashi.monitoring.domain.OHLCBar;
+import com.heikinashi.monitoring.domain.OhlcRepository;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
@@ -59,7 +59,7 @@ public class StrategyRetryPollerService {
     private final InstrumentRepository instruments;
     private final com.heikinashi.monitoring.domain.strategy.StrategyRepository strategies;
     private final StrategyChartRenderer chartRenderer;
-    private final HaRepository haRepository;
+    private final OhlcRepository ohlcRepository;
     private final AiAnalyst aiAnalyst;
     private final EmailSender emailSender;
     private final PendingStrategyAlertRepository pendingAlerts;
@@ -74,7 +74,7 @@ public class StrategyRetryPollerService {
             InstrumentRepository instruments,
             com.heikinashi.monitoring.domain.strategy.StrategyRepository strategies,
             StrategyChartRenderer chartRenderer,
-            HaRepository haRepository,
+            OhlcRepository ohlcRepository,
             AiAnalyst aiAnalyst,
             EmailSender emailSender,
             PendingStrategyAlertRepository pendingAlerts,
@@ -85,7 +85,7 @@ public class StrategyRetryPollerService {
         this.instruments = instruments;
         this.strategies = strategies;
         this.chartRenderer = chartRenderer;
-        this.haRepository = haRepository;
+        this.ohlcRepository = ohlcRepository;
         this.aiAnalyst = aiAnalyst;
         this.emailSender = emailSender;
         this.pendingAlerts = pendingAlerts;
@@ -158,8 +158,8 @@ public class StrategyRetryPollerService {
                     alert.barTime());
             return Optional.empty();
         }
-        List<HABar> bars = withTriggerBar(
-                haRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
+        List<OHLCBar> bars = withTriggerBar(
+                ohlcRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
                 alert.barTime(),
                 pending.triggerBar());
         try {
@@ -179,14 +179,14 @@ public class StrategyRetryPollerService {
      * duplicate) — mirroring the legacy {@code HeerwischChartRenderer} fallback.
      * Returns the input unchanged when the bar is present or no snapshot was kept.
      */
-    static List<HABar> withTriggerBar(List<HABar> bars, Instant barTime, Optional<HABar> triggerBar) {
+    static List<OHLCBar> withTriggerBar(List<OHLCBar> bars, Instant barTime, Optional<OHLCBar> triggerBar) {
         boolean present = bars.stream().anyMatch(b -> b.barTime().equals(barTime));
         if (present || triggerBar.isEmpty()) {
             return bars;
         }
-        List<HABar> restored = new ArrayList<>(bars);
+        List<OHLCBar> restored = new ArrayList<>(bars);
         restored.add(triggerBar.get());
-        restored.sort(Comparator.comparing(HABar::barTime));
+        restored.sort(Comparator.comparing(OHLCBar::barTime));
         return restored;
     }
 

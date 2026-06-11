@@ -152,7 +152,11 @@ public class MonitoringRunService {
                         if (strategyAlert.isPresent()) {
                             summary = summary.addEvents(1);
                             realEventForTf.merge(entry.getKey(), true, Boolean::logicalOr);
-                            List<HABar> chartBars = haRepository.findLastN(
+                            // Raw OHLC for the strategy chart: heerwisch draws the
+                            // candles Heikin-Ashi (CandleStyle.HEIKIN_ASHI) while the
+                            // overlays read the raw close, matching the rule engine
+                            // (CLAUDE.md §9 Component 1b).
+                            List<OHLCBar> chartBars = ohlcRepository.findLastN(
                                     inst.id(),
                                     entry.getKey(),
                                     strategyAlert.get().barTime(),

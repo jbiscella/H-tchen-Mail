@@ -3,8 +3,8 @@ package com.heikinashi.monitoring.cucumber;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.AlertEnrichment;
-import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PollResult;
@@ -85,10 +85,10 @@ public class StrategyRetrySteps {
     @Given("a strategy pending alert is queued with retry_count {int} due now carrying its trigger bar")
     public void a_strategy_pending_alert_is_queued_carrying_trigger_bar(int retryCount) {
         StrategyAlert alert = seedAlert();
-        // The HA repository deliberately has NO bar at alert.barTime() (retention
-        // evicted it); the pending carries the triggering bar's snapshot so the
+        // The OHLC repository deliberately has NO bar at alert.barTime() (retention
+        // evicted it); the pending carries the triggering raw bar's snapshot so the
         // retry can synthesize it back into the series before rendering.
-        HABar trigger = new HABar(
+        OHLCBar trigger = new OHLCBar(
                 alert.instrumentId(),
                 alert.timeframe(),
                 alert.barTime(),
@@ -96,11 +96,13 @@ public class StrategyRetrySteps {
                 new BigDecimal("110"),
                 new BigDecimal("95"),
                 new BigDecimal("105"),
+                Optional.empty(),
+                "test",
                 alert.detectedAt());
         enqueuePending(retryCount, Optional.of(trigger));
     }
 
-    private void enqueuePending(int retryCount, Optional<HABar> triggerBar) {
+    private void enqueuePending(int retryCount, Optional<OHLCBar> triggerBar) {
         StrategyAlert alert = seedAlert();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),

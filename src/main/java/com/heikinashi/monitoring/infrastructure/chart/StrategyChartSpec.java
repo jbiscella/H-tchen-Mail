@@ -1,6 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.chart;
 
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Set;
 import org.hatrack.heerwisch.api.error.InvalidChartSpecException;
 import org.hatrack.heerwisch.api.spec.Annotation;
+import org.hatrack.heerwisch.api.spec.CandleStyle;
 import org.hatrack.heerwisch.api.spec.ChartSpec;
 import org.hatrack.heerwisch.api.spec.ChartSpecBuilder;
 import org.hatrack.heerwisch.api.spec.GlyphStyle;
@@ -26,8 +27,10 @@ import org.hatrack.heerwisch.api.spec.Pane;
  * SI-2 — builds the heerwisch {@link ChartSpec} for a {@link StrategyAlert}: the
  * strategy's derived overlays (SI-1, via {@link StrategyChartIndicators}) placed
  * in their panes, plus a role-derived direction marker on the matched bar
- * (CLAUDE.md §9 Component 1b). Pure: strategy + alert + the HA lookback bars in,
- * a {@code ChartSpec} out — no DB, no PNG rendering.
+ * (CLAUDE.md §9 Component 1b). Pure: strategy + alert + the raw OHLC lookback bars
+ * in, a {@code ChartSpec} out — no DB, no PNG rendering. Candles are Heikin-Ashi,
+ * drawn from the raw series by {@code CandleStyle.HEIKIN_ASHI} (ha-track 0.57),
+ * while indicators read the raw close (§9 Component 1b).
  */
 public final class StrategyChartSpec {
 
@@ -38,14 +41,15 @@ public final class StrategyChartSpec {
 
     private StrategyChartSpec() {}
 
-    public static ChartSpec build(Strategy strategy, StrategyAlert alert, List<HABar> bars, ChartConfig config) {
+    public static ChartSpec build(Strategy strategy, StrategyAlert alert, List<OHLCBar> bars, ChartConfig config) {
         try {
             LayoutSpec layout = LayoutSpec.builder()
                     .withSize(config.getWidthPx(), config.getHeightPx())
                     .withFormat(ImageFormat.PNG)
                     .build();
             ChartSpecBuilder builder = ChartSpec.builder()
-                    .withSeries(CommonsBarAdapter.toCommonsHaSeries(bars))
+                    .withSeries(CommonsBarAdapter.toCommonsOhlcSeries(bars))
+                    .withCandleStyle(CandleStyle.HEIKIN_ASHI)
                     .withLayout(layout);
             placeIndicators(builder, StrategyChartIndicators.derive(strategy), bars.size());
             addMarkers(builder, alert, bars);
@@ -84,7 +88,7 @@ public final class StrategyChartSpec {
      * an unrecognized role falls back to a neutral bar highlight. Display only —
      * the role text is never used for a trade decision.
      */
-    private static void addMarkers(ChartSpecBuilder builder, StrategyAlert alert, List<HABar> bars) {
+    private static void addMarkers(ChartSpecBuilder builder, StrategyAlert alert, List<OHLCBar> bars) {
         Instant at = alert.barTime();
         Set<String> seenRoles = new HashSet<>();
         for (StrategyAlertLine line : alert.lines()) {
@@ -104,18 +108,18 @@ public final class StrategyChartSpec {
                 case "short_exit" ->
                     builder.addAnnotation(
                             new Annotation.EntryExitMarkerAuto(at, MarkerDirection.SHORT_EXIT, GlyphStyle.UP_TRIANGLE));
-                default -> builder.addAnnotation(new Annotation.BarHighlight(at, haCloseAt(bars, at), line.role()));
+                default -> builder.addAnnotation(new Annotation.BarHighlight(at, closeAt(bars, at), line.role()));
             }
         }
     }
 
-    private static BigDecimal haCloseAt(List<HABar> bars, Instant at) {
+    private static BigDecimal closeAt(List<OHLCBar> bars, Instant at) {
         return bars.stream()
                 .filter(b -> b.barTime().equals(at))
-                .map(HABar::haClose)
+                .map(OHLCBar::close)
                 .findFirst()
                 .orElseGet(() -> bars.isEmpty()
                         ? BigDecimal.ZERO
-                        : bars.get(bars.size() - 1).haClose());
+                        : bars.get(bars.size() - 1).close());
     }
 }

@@ -10,12 +10,14 @@ import java.util.List;
  * (which renders a legacy {@code PatternEvent}): a strategy alert's chart is
  * built from the strategy's derived overlays and a role-direction marker, so the
  * renderer needs the {@link Strategy} (for overlay derivation), the
- * {@link StrategyAlert} (for the trigger bar + roles), and the HA lookback bars.
+ * {@link StrategyAlert} (for the trigger bar + roles), and the raw OHLC lookback
+ * bars (candles are drawn Heikin-Ashi via {@code CandleStyle.HEIKIN_ASHI} while
+ * indicators read the raw close — §9 Component 1b).
  *
  * <p>Implementations may raise
  * {@link com.heikinashi.monitoring.domain.error.ChartRenderException} on failure.
  */
 public interface StrategyChartRenderer {
 
-    ChartImage render(StrategyAlert alert, Strategy strategy, List<HABar> bars);
+    ChartImage render(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars);
 }

@@ -1,7 +1,7 @@
 package com.heikinashi.monitoring.application;
 
 import com.heikinashi.monitoring.domain.ChartImage;
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.StrategyChartRenderer;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
@@ -15,7 +15,7 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
 
     private final Deque<RuntimeException> scriptedFailures = new ArrayDeque<>();
     private int callCount;
-    private List<HABar> lastBars = List.of();
+    private List<OHLCBar> lastBars = List.of();
 
     public void failNext(int n) {
         for (int i = 0; i < n; i++) {
@@ -28,12 +28,12 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
     }
 
     /** The bar series passed to the most recent render call (for retry bar-restore assertions). */
-    public List<HABar> lastBars() {
+    public List<OHLCBar> lastBars() {
         return lastBars;
     }
 
     @Override
-    public ChartImage render(StrategyAlert alert, Strategy strategy, List<HABar> bars) {
+    public ChartImage render(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars) {
         callCount++;
         lastBars = List.copyOf(bars);
         RuntimeException next = scriptedFailures.pollFirst();

@@ -9,9 +9,9 @@ import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.DispatchSummary;
 import com.heikinashi.monitoring.domain.EmailSender;
-import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
@@ -84,7 +84,7 @@ public class StrategyAlertDispatchService {
         this.auditEnabled = alertsConfig.isAuditEnabled();
     }
 
-    public DispatchSummary dispatch(StrategyAlert alert, Strategy strategy, List<HABar> bars) {
+    public DispatchSummary dispatch(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars) {
         InstrumentConfig cfg = instruments.findConfigById(alert.instrumentId()).orElse(null);
         if (cfg == null) {
             LOG.warn("strategy_dispatch_skip_no_config instrument_id={}", alert.instrumentId());
@@ -137,14 +137,14 @@ public class StrategyAlertDispatchService {
         return DispatchSummary.empty().plusSent();
     }
 
-    private DispatchSummary enqueue(StrategyAlert alert, List<HABar> bars, String component, RuntimeException cause) {
+    private DispatchSummary enqueue(StrategyAlert alert, List<OHLCBar> bars, String component, RuntimeException cause) {
         // No chart is stored: the retry poller re-renders from the persisted
-        // Strategy + bars (CLAUDE.md §9 Component 1c SI-3c.3). We DO keep the
-        // triggering HA bar's snapshot so the retry can synthesize it back if
-        // retention evicts it before then (heerwisch V7 — marker must be on a
-        // bar in the series).
+        // Strategy + raw OHLC bars (CLAUDE.md §9 Component 1c SI-3c.3). We DO keep
+        // the triggering raw OHLC bar's snapshot so the retry can synthesize it
+        // back if retention evicts it before then (heerwisch V7 — marker must be
+        // on a bar in the series).
         Instant now = clock.instant();
-        Optional<HABar> triggerBar =
+        Optional<OHLCBar> triggerBar =
                 bars.stream().filter(b -> b.barTime().equals(alert.barTime())).findFirst();
         PendingStrategyAlert pending = new PendingStrategyAlert(
                 PendingStrategyAlert.uidOf(alert),

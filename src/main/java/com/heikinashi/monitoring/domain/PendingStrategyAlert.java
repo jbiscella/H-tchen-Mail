@@ -15,11 +15,13 @@ import java.util.Optional;
  * {@code Strategy} + bars rather than carrying a (potentially &gt;400 KB) PNG blob
  * in the row.
  *
- * <p>{@code triggerBar} is the HA bar that fired the alert. Under
- * {@code SNAPSHOT_ONLY} retention a later ingest can evict it before the retry
- * runs, so the poller synthesizes it back into the series (heerwisch requires the
- * entry/exit marker to sit on a bar that is present — V7); empty only for
- * pending items written before this snapshot was added.
+ * <p>{@code triggerBar} is the raw OHLC bar that fired the alert (the strategy
+ * chart is built from the raw series, with Heikin-Ashi candles drawn by
+ * {@code CandleStyle.HEIKIN_ASHI} — §9 Component 1b). Under {@code SNAPSHOT_ONLY}
+ * retention a later ingest can evict it before the retry runs, so the poller
+ * synthesizes it back into the series (heerwisch requires the entry/exit marker
+ * to sit on a bar that is present — V7); empty only for pending items written
+ * before this snapshot was added.
  *
  * <p>Identified by a deterministic {@code eventUid =
  * <instrument_id>_<tf>_<bar_time>_strategy} so concurrent pollers see one item.
@@ -27,7 +29,7 @@ import java.util.Optional;
 public record PendingStrategyAlert(
         String eventUid,
         StrategyAlert alert,
-        Optional<HABar> triggerBar,
+        Optional<OHLCBar> triggerBar,
         int retryCount,
         Instant retryAt,
         PendingAlert.LastError lastError,
