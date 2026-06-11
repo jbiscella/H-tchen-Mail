@@ -45,3 +45,22 @@ Feature: SI-1 — Strategy-driven chart overlays
       | ha_strong_bullish() |
     When I derive the chart indicators
     Then no chart indicators are derived
+
+  # The overlays must read the SAME raw price the rule engine evaluates on
+  # (DslConditionEvaluator uses raw OHLC, never Heikin-Ashi). Candles stay HA
+  # via CandleStyle.HEIKIN_ASHI (ha-track 0.57); only the indicator math is raw.
+
+  Scenario: Oscillator and MA overlays read the raw close, not the HA close
+    Given a strategy whose single scenario has conditions:
+      | rsi(14) crosses below 30    |
+      | close crosses above sma(50) |
+    When I derive the chart indicators
+    Then every derived indicator reads the raw "CLOSE" price source
+
+  Scenario: HHV/LLV channels read raw HIGH and LOW, not the HA extremes
+    Given a strategy whose single scenario has conditions:
+      | close crosses above highest_high(20) |
+      | close crosses below lowest_low(20)   |
+    When I derive the chart indicators
+    Then the "RollingMax" overlay reads the raw "HIGH" price source
+    And the "RollingMin" overlay reads the raw "LOW" price source

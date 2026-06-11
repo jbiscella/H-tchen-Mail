@@ -101,6 +101,30 @@ public class StrategyChartSteps {
         assertThat(derived).allMatch(ind -> ind.defaultPane().name().equals(pane));
     }
 
+    @Then("every derived indicator reads the raw {string} price source")
+    public void every_derived_indicator_reads_the_raw_price_source(String source) {
+        assertThat(derived).isNotEmpty();
+        assertThat(derived).allSatisfy(ind -> assertThat(priceSourceOf(ind))
+                .as("price source of %s", ind)
+                .isEqualTo(source));
+    }
+
+    @Then("the {string} overlay reads the raw {string} price source")
+    public void the_overlay_reads_the_raw_price_source(String type, String source) {
+        assertThat(derived)
+                .as("a derived %s overlay", type)
+                .filteredOn(ind -> ind.getClass().getSimpleName().equals(type))
+                .isNotEmpty()
+                .allSatisfy(ind -> assertThat(priceSourceOf(ind))
+                        .as("price source of %s", ind)
+                        .isEqualTo(source));
+    }
+
+    @Then("the chart spec uses the {string} candle style")
+    public void the_chart_spec_uses_the_candle_style(String style) {
+        assertThat(spec.candleStyle().name()).isEqualTo(style);
+    }
+
     // -------- SI-2 ------------------------------------------------------------
 
     @Given("an HA lookback window of {int} bars")
@@ -223,6 +247,20 @@ public class StrategyChartSteps {
                     && Integer.parseInt(row.get("signal")) == macd.signalPeriod();
         }
         return matchesType(ind, type, Integer.parseInt(row.get("period")));
+    }
+
+    /** The {@code PriceSource} name an overlay reads, for the source-faithfulness checks. */
+    private static String priceSourceOf(Indicator ind) {
+        return switch (ind) {
+            case Indicator.RSI rsi -> rsi.priceSource().name();
+            case Indicator.SMA sma -> sma.priceSource().name();
+            case Indicator.EMA ema -> ema.priceSource().name();
+            case Indicator.StdDev sd -> sd.priceSource().name();
+            case Indicator.MACD macd -> macd.priceSource().name();
+            case Indicator.RollingMax rm -> rm.priceSource().name();
+            case Indicator.RollingMin rm -> rm.priceSource().name();
+            default -> throw new IllegalArgumentException("indicator carries no price source: " + ind);
+        };
     }
 
     private static boolean matchesType(Indicator ind, String type, int period) {
