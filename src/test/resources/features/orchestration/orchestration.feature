@@ -188,6 +188,28 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     And the main summary reports 1 events detected
     And the main summary reports 0 alerts sent
 
+  # force_email on a STRATEGY instrument must route through the strategy dispatch
+  # path (strategy chart + scenario-derived overlays + strategy email), NOT degrade
+  # onto the legacy PatternEvent dispatch. The synthetic forced StrategyAlert carries
+  # one honest "forced" line — it never claims a scenario matched (Codex PR#80 #6).
+  Scenario: force_email on a strategy instrument routes through the strategy dispatch path
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And the tracked timeframes for "AAPL" are "1d"
+    And the instrument is monitored by a strategy whose scenario "entry" has conditions:
+      | close is above 100 |
+    And a previously stored "1d" bar for "AAPL" at "2026-05-06T00:00:00Z"
+    And HA has previously been computed on "1d" for "AAPL" from the full OHLC chain
+    And the provider has no bars for any symbol
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 1 events detected
+    And the main summary reports 1 alerts sent
+    And the strategy chart is rendered
+    And the legacy chart renderer is not invoked
+    And a strategy email is sent to "alice@example.com"
+    And the forced strategy alert carries a single honest "forced" line
+
   Scenario: Default payload still does not send when no pattern fires
     Given an instrument "AAPL" on "NASDAQ" already exists
     And the recipients for "AAPL" are "alice@example.com"
