@@ -1994,16 +1994,41 @@ Feature: Scheduling and Orchestration
     catch-up run after a Lambda outage loses patterns on intermediate bars;
     acceptable today, can be relaxed via a MainInput flag later.
 
-  Scenario: Manual end-to-end pipeline smoke via force_email
+  Scenario: Manual end-to-end pipeline smoke via force_email (pattern instrument)
     Given an operator invokes monitoring-main with {force_email:true}
+    And the instrument is NOT monitored by a strategy
     And no real pattern fires for a tracked (instrument, timeframe)
     Then a synthetic PatternEvent(pattern=FORCED, subtype=FORCED) is built
       from the latest persisted HA + OHLC bar for that (instrument, timeframe)
-    And chart + AI + email run end-to-end against that event
+    And chart + AI + email run end-to-end against that event via the legacy dispatch
     And when no HA bar exists yet, the synthesis is silently skipped with a WARN log
     Note: FORCED is a synthetic pattern kind, never produced by the detector
     and never settable via instrument config; it exists only to exercise the
     dispatch pipeline manually.
+
+  Scenario: Manual end-to-end pipeline smoke via force_email (strategy instrument)
+    Given an operator invokes monitoring-main with {force_email:true}
+    And the instrument IS monitored by a strategy
+    And the strategy does not fire on the latest bar this run
+    Then a synthetic forced StrategyAlert is built from the latest persisted bar,
+      carrying a single honest "forced" line (scenarioName="forced", role="forced",
+      with no stop-loss / take-profit / position-precondition memo) — never a fake
+      scenario match
+    And it is routed through the strategy dispatch path
+      (StrategyAlertDispatchService → strategy chart + AI + strategy email, with the
+      strategy retry queue on transient failure), NEVER the legacy PatternEvent path
+    And the strategy chart marks the bar with a neutral highlight labelled "forced"
+      (the role-derived marker falls through to a bar highlight — no entry/exit glyph,
+      because nothing actually fired)
+    And when no persisted bar exists yet, the synthesis is silently skipped with a WARN log
+    Note: a strategy instrument's manual smoke stays faithful to what a real strategy
+    alert email looks like (strategy chart with scenario-derived overlays + strategy
+    email body), instead of degrading to a generic pattern chart on the legacy path.
+    The "forced" role is honest — it never asserts that a scenario matched, mirroring
+    how FORCED is a synthetic pattern kind on the pattern path. The "no real event this
+    run" guard already covers a genuine strategy alert (that path sets the per-timeframe
+    real-event flag), so a forced strategy alert is only ever synthesised when the
+    strategy stayed silent.
 
   Scenario: No active instruments → fast exit
     Given no instruments have status="active"
