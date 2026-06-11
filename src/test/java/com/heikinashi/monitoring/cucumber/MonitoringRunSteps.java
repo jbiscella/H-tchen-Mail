@@ -121,7 +121,9 @@ public class MonitoringRunSteps {
     @Then("the forced strategy alert carries a single honest {string} line")
     public void forced_strategy_alert_single_honest_line(String marker) {
         var alert = world.strategyChartRenderer().lastAlert();
-        assertThat(alert).as("a strategy alert was routed to the strategy chart").isNotNull();
+        assertThat(alert)
+                .as("a strategy alert was routed to the strategy chart")
+                .isNotNull();
         assertThat(alert.lines()).hasSize(1);
         var line = alert.lines().get(0);
         assertThat(line.scenarioName()).isEqualTo(marker);
