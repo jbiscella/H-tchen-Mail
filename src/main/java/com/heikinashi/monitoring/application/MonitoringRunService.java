@@ -21,6 +21,7 @@ import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.DomainException;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
 import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import jakarta.inject.Singleton;
 import java.time.Clock;
@@ -183,8 +184,35 @@ public class MonitoringRunService {
                     InstrumentConfig cfg = instruments
                             .findConfigById(inst.id())
                             .orElseThrow(() -> new IllegalStateException("missing config for " + inst.id()));
+                    // A strategy instrument's forced smoke must route through the
+                    // dedicated strategy dispatch (strategy chart + scenario overlays
+                    // + strategy email), not degrade onto the legacy PatternEvent path
+                    // (CLAUDE.md §10 force_email, strategy-instrument scenario).
+                    Optional<Strategy> strategy = strategies.findByInstrumentId(inst.id());
                     for (Timeframe tf : cfg.trackedTimeframes()) {
                         if (Boolean.TRUE.equals(realEventForTf.get(tf))) continue;
+                        if (strategy.isPresent()) {
+                            Optional<StrategyAlert> forced = buildForcedStrategyAlert(inst, tf, strategy.get());
+                            if (forced.isPresent()) {
+                                List<OHLCBar> chartBars = ohlcRepository.findLastN(
+                                        inst.id(), tf, forced.get().barTime(), STRATEGY_CHART_LOOKBACK_BARS);
+                                summary = summary.addEvents(1);
+                                summary = summary.withDispatch(
+                                        strategyDispatchService.dispatch(forced.get(), strategy.get(), chartBars));
+                                LOG.info(
+                                        "main_forced_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
+                                        inst.id(),
+                                        tf.wire(),
+                                        forced.get().barTime(),
+                                        strategy.get().name());
+                            } else {
+                                LOG.warn(
+                                        "main_forced_event_skipped instrument_id={} timeframe={} reason=no_bar",
+                                        inst.id(),
+                                        tf.wire());
+                            }
+                            continue;
+                        }
                         Optional<PatternEvent> forced = buildForcedEvent(inst, tf);
                         if (forced.isPresent()) {
                             instrumentEvents.add(forced.get());
@@ -325,6 +353,35 @@ public class MonitoringRunService {
                 PatternSubtype.FORCED,
                 Map.of("forced", "true"),
                 snapshot,
+                clock.instant()));
+    }
+
+    /**
+     * Synthesise a forced {@link StrategyAlert} for a strategy instrument so the
+     * strategy chart + AI + email pipeline runs end-to-end without waiting for a
+     * scenario to fire. The alert is anchored on the latest persisted bar and
+     * carries a single honest {@code "forced"} line — it never claims a scenario
+     * matched (mirroring how {@link PatternKind#FORCED} is a synthetic pattern
+     * kind on the legacy path; the chart's role-derived marker therefore falls
+     * through to a neutral bar highlight). Empty when no bar is persisted yet
+     * (first ingest), so the caller logs + skips.
+     */
+    private Optional<StrategyAlert> buildForcedStrategyAlert(Instrument inst, Timeframe tf, Strategy strategy) {
+        Instant cutoff = clock.instant().plusSeconds(1);
+        Optional<HABar> latestHa = haRepository.findLatestBefore(inst.id(), tf, cutoff);
+        if (latestHa.isEmpty()) {
+            return Optional.empty();
+        }
+        StrategyAlertLine forcedLine =
+                new StrategyAlertLine("forced", "forced", Optional.empty(), Optional.empty(), Optional.empty());
+        return Optional.of(new StrategyAlert(
+                inst.id(),
+                inst.ticker(),
+                inst.exchange(),
+                tf,
+                latestHa.get().barTime(),
+                strategy.name(),
+                List.of(forcedLine),
                 clock.instant()));
     }
 }
