@@ -181,7 +181,7 @@ public final class World {
                 repository,
                 strategyRepository,
                 strategyChartRenderer,
-                haRepository,
+                ohlcRepository,
                 aiAnalyst,
                 emailSender,
                 pendingStrategyAlerts,

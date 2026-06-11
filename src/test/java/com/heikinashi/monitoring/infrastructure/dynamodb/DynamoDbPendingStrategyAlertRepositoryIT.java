@@ -2,7 +2,7 @@ package com.heikinashi.monitoring.infrastructure.dynamodb;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.Timeframe;
@@ -46,7 +46,7 @@ class DynamoDbPendingStrategyAlertRepositoryIT extends LocalStackITBase {
         assertThat(loaded.alert().lines().get(0).role()).isEqualTo("long_entry");
         assertThat(loaded.retryCount()).isZero();
         assertThat(loaded.triggerBar()).isPresent();
-        assertThat(loaded.triggerBar().get().haClose()).isEqualByComparingTo(new BigDecimal("105"));
+        assertThat(loaded.triggerBar().get().close()).isEqualByComparingTo(new BigDecimal("105"));
         assertThat(loaded.triggerBar().get().barTime()).isEqualTo(loaded.alert().barTime());
     }
 
@@ -104,7 +104,7 @@ class DynamoDbPendingStrategyAlertRepositoryIT extends LocalStackITBase {
 
     private static PendingStrategyAlert sample(int retryCount, Instant retryAt) {
         StrategyAlert alert = alert();
-        HABar triggerBar = new HABar(
+        OHLCBar triggerBar = new OHLCBar(
                 alert.instrumentId(),
                 alert.timeframe(),
                 alert.barTime(),
@@ -112,6 +112,8 @@ class DynamoDbPendingStrategyAlertRepositoryIT extends LocalStackITBase {
                 new BigDecimal("110"),
                 new BigDecimal("95"),
                 new BigDecimal("105"),
+                Optional.empty(),
+                "test",
                 alert.detectedAt());
         return new PendingStrategyAlert(
                 uid(),

@@ -1,7 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.chart;
 
 import com.heikinashi.monitoring.domain.ChartImage;
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.StrategyChartRenderer;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
@@ -31,7 +31,7 @@ public class HeerwischStrategyChartRenderer implements StrategyChartRenderer {
     }
 
     @Override
-    public ChartImage render(StrategyAlert alert, Strategy strategy, List<HABar> bars) {
+    public ChartImage render(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars) {
         try {
             ChartSpec spec = StrategyChartSpec.build(strategy, alert, bars, config);
             org.hatrack.heerwisch.api.spec.ChartImage image = renderer.render(spec);

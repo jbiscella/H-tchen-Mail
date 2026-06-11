@@ -1,6 +1,6 @@
 package com.heikinashi.monitoring.infrastructure.dynamodb;
 
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
@@ -138,14 +138,16 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
         item.put("entity", s(Keys.ENTITY_STRATEGY_PENDING_ALERT));
         item.put("event_uid", s(pa.eventUid()));
         item.put("alert", s(StrategyAlertJson.toJson(pa.alert())));
-        // Triggering HA bar OHLC snapshot, so the retry can synthesize it back if
-        // retention evicts the bar before then (CLAUDE.md §2 / Component 1c).
-        // instrument / timeframe / bar_time are recoverable from the alert.
+        // Triggering raw OHLC bar snapshot, so the retry can synthesize it back if
+        // retention evicts the bar before then (CLAUDE.md §2 / Component 1c). The
+        // strategy chart renders from the raw series (HA candles via
+        // CandleStyle.HEIKIN_ASHI). instrument / timeframe / bar_time come from the
+        // alert; volume / source are not needed for rendering.
         pa.triggerBar().ifPresent(b -> {
-            item.put("trigger_ha_open", n(b.haOpen().toPlainString()));
-            item.put("trigger_ha_high", n(b.haHigh().toPlainString()));
-            item.put("trigger_ha_low", n(b.haLow().toPlainString()));
-            item.put("trigger_ha_close", n(b.haClose().toPlainString()));
+            item.put("trigger_ohlc_open", n(b.open().toPlainString()));
+            item.put("trigger_ohlc_high", n(b.high().toPlainString()));
+            item.put("trigger_ohlc_low", n(b.low().toPlainString()));
+            item.put("trigger_ohlc_close", n(b.close().toPlainString()));
         });
         item.put("retry_count", n(Integer.toString(pa.retryCount())));
         item.put("retry_at", s(pa.retryAt().toString()));
@@ -175,16 +177,18 @@ public class DynamoDbPendingStrategyAlertRepository implements PendingStrategyAl
                 Instant.parse(errMap.get("ts").s()),
                 Optional.ofNullable(errMap.get("component")).map(AttributeValue::s));
         StrategyAlert alert = StrategyAlertJson.fromJson(item.get("alert").s());
-        Optional<HABar> triggerBar = Optional.empty();
-        if (item.containsKey("trigger_ha_close")) {
-            triggerBar = Optional.of(new HABar(
+        Optional<OHLCBar> triggerBar = Optional.empty();
+        if (item.containsKey("trigger_ohlc_close")) {
+            triggerBar = Optional.of(new OHLCBar(
                     alert.instrumentId(),
                     alert.timeframe(),
                     alert.barTime(),
-                    new BigDecimal(item.get("trigger_ha_open").n()),
-                    new BigDecimal(item.get("trigger_ha_high").n()),
-                    new BigDecimal(item.get("trigger_ha_low").n()),
-                    new BigDecimal(item.get("trigger_ha_close").n()),
+                    new BigDecimal(item.get("trigger_ohlc_open").n()),
+                    new BigDecimal(item.get("trigger_ohlc_high").n()),
+                    new BigDecimal(item.get("trigger_ohlc_low").n()),
+                    new BigDecimal(item.get("trigger_ohlc_close").n()),
+                    Optional.empty(),
+                    "snapshot",
                     alert.detectedAt()));
         }
         return new PendingStrategyAlert(

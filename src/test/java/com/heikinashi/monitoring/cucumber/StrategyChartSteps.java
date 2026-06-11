@@ -3,7 +3,7 @@ package com.heikinashi.monitoring.cucumber;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.ChartImage;
-import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
@@ -48,7 +48,7 @@ public class StrategyChartSteps {
     // SI-2 state
     private static final byte[] PNG_MAGIC = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
 
-    private List<HABar> bars;
+    private List<OHLCBar> bars;
     private Instant triggerBarTime;
     private StrategyAlert alert;
     private ChartSpec spec;
@@ -135,7 +135,7 @@ public class StrategyChartSteps {
             double open = 95 + 0.25 * (d - 1) + 3.0 * Math.sin((d - 1) / 3.5);
             double high = Math.max(open, base) + 1.2;
             double low = Math.min(open, base) - 1.1;
-            HABar bar = new HABar(
+            OHLCBar bar = new OHLCBar(
                     INSTR,
                     Timeframe.D1,
                     T0.plus(d, ChronoUnit.DAYS),
@@ -143,6 +143,8 @@ public class StrategyChartSteps {
                     bd(high),
                     bd(low),
                     bd(base),
+                    Optional.empty(),
+                    "test",
                     Instant.parse("2026-05-07T22:00:00Z"));
             bars.add(bar);
             triggerBarTime = bar.barTime();

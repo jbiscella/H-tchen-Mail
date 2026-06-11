@@ -3,8 +3,8 @@ package com.heikinashi.monitoring.cucumber;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.DispatchSummary;
-import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.Instrument;
+import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
@@ -56,8 +56,8 @@ public class StrategyDispatchSteps {
 
     @When("the strategy alert is dispatched")
     public void the_strategy_alert_is_dispatched() {
-        // The chart renderer is faked, so the HA bars are not exercised here.
-        summary = world.strategyAlertDispatchService().dispatch(alert, strategy, List.<HABar>of());
+        // The chart renderer is faked, so the raw OHLC bars are not exercised here.
+        summary = world.strategyAlertDispatchService().dispatch(alert, strategy, List.<OHLCBar>of());
         world.setLastDispatchSummary(summary);
     }
 

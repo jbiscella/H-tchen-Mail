@@ -27,14 +27,18 @@ import org.hatrack.heerwisch.api.spec.Indicator;
  * <p>Like wichtelm, indicator references are found by scanning the condition
  * STRINGS for {@code name(args)} calls (ha-track's {@code dsl-eval} exposes no
  * referenced-indicator API) and mapped to {@code Indicator.*} via a fixed table.
- * Price source is {@code HA_CLOSE} (these charts draw Heikin-Ashi candles).
+ * Price source is the raw {@code CLOSE} (NOT {@code HA_CLOSE}): the rule engine
+ * ({@code DslConditionEvaluator}) evaluates these indicators on raw OHLC, so the
+ * overlays must read the same raw price or the chart would contradict the alert.
+ * Candles stay Heikin-Ashi via {@code CandleStyle.HEIKIN_ASHI} (ha-track 0.57),
+ * which draws HA candle bodies from the raw series while indicators read raw close.
  *
  * <p>Pure and deterministic: the only input is the parsed strategy; no I/O.
  */
 public final class StrategyChartIndicators {
 
-    /** Heikin-Ashi close: these charts render HA candles, so overlays read HA prices. */
-    private static final PriceSource SOURCE = PriceSource.HA_CLOSE;
+    /** Raw close: overlays read the same raw price the rule engine evaluates on, not HA. */
+    private static final PriceSource SOURCE = PriceSource.CLOSE;
 
     private static final Optional<Indicator.RsiVisualization> RSI_VIZ =
             Optional.of(Indicator.RsiVisualization.DANGER_ZONES_ON);
@@ -85,9 +89,8 @@ public final class StrategyChartIndicators {
                         case "stddev" -> put(byKey, new Indicator.StdDev(intArg(args, 0), SOURCE));
                         case "macd_line", "macd_signal", "macd_histogram" ->
                             put(byKey, new Indicator.MACD(intArg(args, 0), intArg(args, 1), intArg(args, 2), SOURCE));
-                        case "highest_high" ->
-                            put(byKey, new Indicator.RollingMax(intArg(args, 0), PriceSource.HA_HIGH));
-                        case "lowest_low" -> put(byKey, new Indicator.RollingMin(intArg(args, 0), PriceSource.HA_LOW));
+                        case "highest_high" -> put(byKey, new Indicator.RollingMax(intArg(args, 0), PriceSource.HIGH));
+                        case "lowest_low" -> put(byKey, new Indicator.RollingMin(intArg(args, 0), PriceSource.LOW));
                         case "highest_close" -> put(byKey, new Indicator.RollingMax(intArg(args, 0), SOURCE));
                         case "lowest_close" -> put(byKey, new Indicator.RollingMin(intArg(args, 0), SOURCE));
                         case "macd_bullish_cross", "macd_bearish_cross", "macd_zero_cross_up", "macd_zero_cross_down" ->
