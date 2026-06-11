@@ -16,6 +16,7 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
     private final Deque<RuntimeException> scriptedFailures = new ArrayDeque<>();
     private int callCount;
     private List<OHLCBar> lastBars = List.of();
+    private StrategyAlert lastAlert;
 
     public void failNext(int n) {
         for (int i = 0; i < n; i++) {
@@ -32,10 +33,16 @@ public final class ScriptedStrategyChartRenderer implements StrategyChartRendere
         return lastBars;
     }
 
+    /** The alert passed to the most recent render call (for forced-line / routing assertions). */
+    public StrategyAlert lastAlert() {
+        return lastAlert;
+    }
+
     @Override
     public ChartImage render(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars) {
         callCount++;
         lastBars = List.copyOf(bars);
+        lastAlert = alert;
         RuntimeException next = scriptedFailures.pollFirst();
         if (next != null) {
             throw next;

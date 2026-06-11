@@ -111,6 +111,26 @@ public class MonitoringRunSteps {
         assertThat(world.lastMainSummary().eventsDetected()).isEqualTo(n);
     }
 
+    @Then("the legacy chart renderer is not invoked")
+    public void legacy_chart_renderer_not_invoked() {
+        assertThat(world.chartRenderer().callCount())
+                .as("legacy PatternEvent chart renderer must not run for a strategy instrument")
+                .isZero();
+    }
+
+    @Then("the forced strategy alert carries a single honest {string} line")
+    public void forced_strategy_alert_single_honest_line(String marker) {
+        var alert = world.strategyChartRenderer().lastAlert();
+        assertThat(alert).as("a strategy alert was routed to the strategy chart").isNotNull();
+        assertThat(alert.lines()).hasSize(1);
+        var line = alert.lines().get(0);
+        assertThat(line.scenarioName()).isEqualTo(marker);
+        assertThat(line.role()).isEqualTo(marker);
+        assertThat(line.positionPrecondition()).isEmpty();
+        assertThat(line.stopLoss()).isEmpty();
+        assertThat(line.takeProfit()).isEmpty();
+    }
+
     // -------- Helpers ---------------------------------------------------------
 
     private Set<String> parseTickers(String csv) {
