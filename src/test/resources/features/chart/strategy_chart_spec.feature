@@ -19,6 +19,15 @@ Feature: SI-2 — Strategy alert chart spec
     Then the spec places "RSI" with period 14 in a sub-pane
     And the spec places "SMA" with period 50 in the "MAIN" pane
 
+  # ha-track 0.57: candles are Heikin-Ashi (display) drawn from the raw OHLC
+  # series, so the real-close indicators above are faithful to the rule.
+  Scenario: The strategy chart spec renders Heikin-Ashi candle bodies
+    Given a strategy whose single scenario has conditions:
+      | rsi(14) crosses below 30 |
+    And a strategy alert with a "long_entry" line on the latest bar
+    When I build the strategy chart spec
+    Then the chart spec uses the "HEIKIN_ASHI" candle style
+
   Scenario: A long_entry line places an up-triangle entry marker on the trigger bar
     Given a strategy whose single scenario has conditions:
       | rsi(14) crosses below 30 |
