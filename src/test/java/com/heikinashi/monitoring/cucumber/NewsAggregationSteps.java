@@ -308,12 +308,7 @@ public class NewsAggregationSteps {
                     200, JSON.createArrayNode().addAll(eodhdItems).toString());
         };
         return new EodhdNewsProvider(
-                eodhdConfig,
-                eodhdNewsConfig,
-                Map.of("NASDAQ", ".US", "MIL", ".MI"),
-                recencySource,
-                FIXED_CLOCK,
-                http);
+                eodhdConfig, eodhdNewsConfig, Map.of("NASDAQ", ".US", "MIL", ".MI"), recencySource, FIXED_CLOCK, http);
     }
 
     private static ObjectNode item(String date, String title, String link, String content) {
