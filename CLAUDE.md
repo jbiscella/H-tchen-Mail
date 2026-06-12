@@ -1637,6 +1637,21 @@ transparent (e.g. "news_headlines(5)", "recommendations(0)").
 Be honest about limited information; never invent facts. No strict length
 limit — prioritise information density. Output the JSON object only.
 
+FORMAT (readability increment, 2026-06-12): "corroborating" and
+"contradicting" are each a single string of flowing prose — never JSON,
+arrays, key=value pairs, or bullet/numbered lists — but distinct stories or
+themes MUST be separated by a blank line (a paragraph break inside the
+string, written as the escaped \n\n sequence valid inside a JSON string —
+never a raw line break, which would make the JSON invalid). One continuous
+wall of text is as unacceptable as a bullet list.
+
+Parser resilience (Codex P2 on PR #85): even with the escaped-sequence
+instruction, a model may emit a literal line break inside the string. The
+response parser MUST tolerate unescaped control characters inside JSON
+string literals (Jackson ALLOW_UNESCAPED_CONTROL_CHARS) so a raw paragraph
+break degrades to nothing worse than a correctly parsed newline — the AI
+note must never be lost to the readability instruction itself.
+
 USER:
 Pattern detected:
   instrument: <ticker> on <exchange>
@@ -1754,6 +1769,16 @@ Instrument id: {instrument_id}
   </p>
 </body></html>
 ```
+
+**Paragraph rendering (readability increment, 2026-06-12).** The AI note's
+`corroborating` / `contradicting` strings may contain newlines as paragraph
+separators (the FORMAT prompt instruction above asks the model to separate
+distinct stories/themes with a blank line). The HTML body MUST preserve them:
+after HTML-escaping, `\n` is converted to `<br>` — raw newlines collapse to a
+space in HTML, which produced unreadable wall-of-text notes. Escaping runs
+BEFORE the `<br>` substitution, so no markup can be injected through model
+output. The plain-text body already carries newlines verbatim and needs no
+conversion.
 
 ### Degraded email rules (after 3 failed retries)
 

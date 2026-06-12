@@ -114,6 +114,12 @@ class BedrockAiAnalystTest {
         assertThat(system).containsIgnoringCase("candidates");
         assertThat(system).containsIgnoringCase("promotional");
         assertThat(system.indexOf("RELEVANCE")).isLessThan(system.indexOf("CORROBORATING"));
+        // Readability increment: the FORMAT block must ask for blank-line
+        // paragraph breaks between distinct stories (still banning lists),
+        // expressed as the escaped \n\n sequence — never a raw line break,
+        // which would invalidate the JSON (Codex P2 on PR #85).
+        assertThat(system).containsIgnoringCase("blank line");
+        assertThat(system).contains("\\n\\n");
     }
 
     @Test

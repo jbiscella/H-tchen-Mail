@@ -1,7 +1,9 @@
 package com.heikinashi.monitoring.infrastructure.bedrock;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiConfidence;
 import com.heikinashi.monitoring.domain.error.LLMException;
@@ -30,7 +32,15 @@ import java.util.stream.Collectors;
  */
 final class AiAnalysisJson {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    /**
+     * Lenient on unescaped control characters: the FORMAT prompt instruction
+     * asks for escaped {@code \n\n} paragraph breaks, but a model may emit a
+     * literal line break inside the string — strictly invalid JSON that must
+     * still parse rather than lose the whole note (Codex P2, PR #85).
+     */
+    private static final ObjectMapper MAPPER = JsonMapper.builder()
+            .enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS)
+            .build();
 
     private AiAnalysisJson() {}
 
