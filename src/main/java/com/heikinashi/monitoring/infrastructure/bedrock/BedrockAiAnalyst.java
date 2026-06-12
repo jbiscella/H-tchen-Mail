@@ -60,6 +60,16 @@ public class BedrockAiAnalyst implements AiAnalyst {
             inline, in the prose. Only "confidence" is an enum and "data_sources" an array \
             of strings.
 
+            RELEVANCE — treat fetched news items as candidates, not as facts about the \
+            instrument: provider tagging is loose (a multi-ticker story carries every \
+            symbol it merely mentions), and promotional or advertorial items (stock \
+            picks, "act now" pitches, newsletter upsells) may carry the ticker only as \
+            a passing mention. Discard from consideration any item that is promotional \
+            in nature or where the instrument is incidental to the story; never feature \
+            such an item in CORROBORATING or CONTRADICTING, and do not count it as \
+            evidence anywhere. If, after this triage, no fetched item is genuinely \
+            about the instrument, say so explicitly rather than padding the note.
+
             CORROBORATING — discuss up to 5 news items that justify the detected pattern, \
             in flowing prose. Rank which items to feature by, in priority order:
               1. Recency — items published within 7 days of the pattern bar_time come first.
