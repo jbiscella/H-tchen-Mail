@@ -11,6 +11,7 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.PendingAlert;
+import com.heikinashi.monitoring.domain.PendingAlertRepository;
 import com.heikinashi.monitoring.domain.Timeframe;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -111,6 +112,47 @@ public class AlertDispatchSteps {
     @When("I run the retry poller")
     public void i_run_retry_poller() {
         world.setLastPollResult(world.retryPollerService().processBatch());
+    }
+
+    @When("I run the retry poller twice on the same snapshot")
+    public void i_run_retry_poller_twice_on_same_snapshot() {
+        // Models two concurrent pollers: the due-item view is captured BEFORE the
+        // first pass commits, and the second pass replays that stale snapshot
+        // (writes still hit the real store) — not merely poll-then-poll-empty.
+        List<PendingAlert> snapshot = world.pendingAlerts().queryDue(world.now(), 100);
+        world.retryPollerService().processBatch();
+        world.setLastPollResult(
+                world.retryPollerServiceOver(staleSnapshotOf(world.pendingAlerts(), snapshot))
+                        .processBatch());
+    }
+
+    private static PendingAlertRepository staleSnapshotOf(PendingAlertRepository real, List<PendingAlert> snapshot) {
+        return new PendingAlertRepository() {
+            @Override
+            public void enqueue(PendingAlert pending) {
+                real.enqueue(pending);
+            }
+
+            @Override
+            public Optional<PendingAlert> findByUid(String eventUid) {
+                return real.findByUid(eventUid);
+            }
+
+            @Override
+            public List<PendingAlert> queryDue(Instant now, int limit) {
+                return snapshot;
+            }
+
+            @Override
+            public boolean bumpRetry(PendingAlert updated, int expectedRetryCount) {
+                return real.bumpRetry(updated, expectedRetryCount);
+            }
+
+            @Override
+            public void delete(String eventUid) {
+                real.delete(eventUid);
+            }
+        };
     }
 
     // -------- Then ------------------------------------------------------------

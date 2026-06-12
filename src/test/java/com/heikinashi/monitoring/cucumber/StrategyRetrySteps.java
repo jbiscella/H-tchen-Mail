@@ -7,6 +7,7 @@ import com.heikinashi.monitoring.domain.Instrument;
 import com.heikinashi.monitoring.domain.OHLCBar;
 import com.heikinashi.monitoring.domain.PendingAlert;
 import com.heikinashi.monitoring.domain.PendingStrategyAlert;
+import com.heikinashi.monitoring.domain.PendingStrategyAlertRepository;
 import com.heikinashi.monitoring.domain.PollResult;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
@@ -126,6 +127,48 @@ public class StrategyRetrySteps {
         world.setLastPollResult(pollResult);
     }
 
+    @When("the strategy retry poller runs twice on the same snapshot")
+    public void the_strategy_retry_poller_runs_twice_on_same_snapshot() {
+        // Models two concurrent pollers: the due-item view is captured BEFORE the
+        // first pass commits, and the second pass replays that stale snapshot
+        // (writes still hit the real store) — not merely poll-then-poll-empty.
+        List<PendingStrategyAlert> snapshot = world.pendingStrategyAlerts().queryDue(world.now(), 100);
+        world.strategyRetryPollerService().processBatch();
+        pollResult = world.strategyRetryPollerServiceOver(staleSnapshotOf(world.pendingStrategyAlerts(), snapshot))
+                .processBatch();
+        world.setLastPollResult(pollResult);
+    }
+
+    private static PendingStrategyAlertRepository staleSnapshotOf(
+            PendingStrategyAlertRepository real, List<PendingStrategyAlert> snapshot) {
+        return new PendingStrategyAlertRepository() {
+            @Override
+            public void enqueue(PendingStrategyAlert pending) {
+                real.enqueue(pending);
+            }
+
+            @Override
+            public Optional<PendingStrategyAlert> findByUid(String eventUid) {
+                return real.findByUid(eventUid);
+            }
+
+            @Override
+            public List<PendingStrategyAlert> queryDue(Instant now, int limit) {
+                return snapshot;
+            }
+
+            @Override
+            public boolean bumpRetry(PendingStrategyAlert updated, int expectedRetryCount) {
+                return real.bumpRetry(updated, expectedRetryCount);
+            }
+
+            @Override
+            public void delete(String eventUid) {
+                real.delete(eventUid);
+            }
+        };
+    }
+
     @Then("a strategy pending alert is enqueued with retry_count {int}")
     public void a_strategy_pending_alert_is_enqueued_with_retry_count(int retryCount) {
         Optional<PendingStrategyAlert> pending =
@@ -156,6 +199,14 @@ public class StrategyRetrySteps {
     public void a_full_strategy_email_is_sent_to(String recipient) {
         assertThat(world.emailSender().sends())
                 .anyMatch(s -> !s.degraded() && s.recipients().contains(recipient));
+    }
+
+    @Then("exactly {int} full strategy email(s) is/are sent")
+    public void exactly_n_full_strategy_emails_are_sent(int n) {
+        long full = world.emailSender().sends().stream()
+                .filter(s -> !s.degraded())
+                .count();
+        assertThat(full).as("full strategy sends").isEqualTo(n);
     }
 
     @Then("a degraded strategy email is sent without a chart")
