@@ -300,7 +300,14 @@ public final class World {
      */
     public RetryPollerService retryPollerServiceOver(com.heikinashi.monitoring.domain.PendingAlertRepository pending) {
         return new RetryPollerService(
-                repository, chartRenderer, aiAnalyst, emailSender, pending, auditRepo, clock, retryConfig,
+                repository,
+                chartRenderer,
+                aiAnalyst,
+                emailSender,
+                pending,
+                auditRepo,
+                clock,
+                retryConfig,
                 alertsConfig);
     }
 

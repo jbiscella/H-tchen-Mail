@@ -203,9 +203,8 @@ public class StrategyRetrySteps {
 
     @Then("exactly {int} full strategy email(s) is/are sent")
     public void exactly_n_full_strategy_emails_are_sent(int n) {
-        long full = world.emailSender().sends().stream()
-                .filter(s -> !s.degraded())
-                .count();
+        long full =
+                world.emailSender().sends().stream().filter(s -> !s.degraded()).count();
         assertThat(full).as("full strategy sends").isEqualTo(n);
     }
 

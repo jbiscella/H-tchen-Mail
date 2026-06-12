@@ -121,9 +121,8 @@ public class AlertDispatchSteps {
         // (writes still hit the real store) — not merely poll-then-poll-empty.
         List<PendingAlert> snapshot = world.pendingAlerts().queryDue(world.now(), 100);
         world.retryPollerService().processBatch();
-        world.setLastPollResult(
-                world.retryPollerServiceOver(staleSnapshotOf(world.pendingAlerts(), snapshot))
-                        .processBatch());
+        world.setLastPollResult(world.retryPollerServiceOver(staleSnapshotOf(world.pendingAlerts(), snapshot))
+                .processBatch());
     }
 
     private static PendingAlertRepository staleSnapshotOf(PendingAlertRepository real, List<PendingAlert> snapshot) {
