@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import software.amazon.awssdk.core.document.Document;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
@@ -90,6 +91,29 @@ class BedrockAiAnalystTest {
         AiAnalysis result = analyst.analyze(EVENT);
         assertThat(result.confidence()).isEqualTo(AiConfidence.MEDIUM);
         verify(client, times(2)).converse(any(ConverseRequest.class));
+    }
+
+    @Test
+    void system_prompt_pins_the_RELEVANCE_triage_block() {
+        // Block 17 prompt contract: the relevance triage lives in the prompt, so it
+        // is verified at the snapshot level — a regression that drops the block
+        // must fail CI. The three pinned behaviours: items are candidates (loose
+        // multi-ticker tagging), promotional/incidental items are discarded and
+        // never featured, and an empty post-triage set is said explicitly.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        ScriptedClient scripted = new ScriptedClient(client);
+        scripted.next(endTurnWithText("{\"confidence\":\"LOW\",\"data_sources\":[]}"));
+
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
+        analyst.analyze(EVENT);
+
+        ArgumentCaptor<ConverseRequest> captor = ArgumentCaptor.forClass(ConverseRequest.class);
+        verify(client).converse(captor.capture());
+        String system = captor.getValue().system().get(0).text();
+        assertThat(system).contains("RELEVANCE");
+        assertThat(system).containsIgnoringCase("candidates");
+        assertThat(system).containsIgnoringCase("promotional");
+        assertThat(system.indexOf("RELEVANCE")).isLessThan(system.indexOf("CORROBORATING"));
     }
 
     @Test
