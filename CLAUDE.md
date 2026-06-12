@@ -2749,6 +2749,14 @@ Feature: Monitor an imported strategy, stateless
     When monitoring-main runs
     Then the strategy is evaluated against the just-ingested latest bar, not the stale tail
     And the strategy alert carries the just-ingested bar's time
+    And the chart window handed to the strategy renderer contains the trigger bar
+    Note: the merge applies to BOTH reads — evaluation (else the alert is missed)
+    and the chart lookback (else the marker bar is absent from the series, the
+    render fails V7 and a correctly detected alert degrades onto the retry queue
+    with no trigger-bar snapshot, instead of a first-attempt email). The merged
+    series stays capped at STRATEGY_LOOKBACK_BARS (trimmed from the oldest side):
+    an outage catch-up that inserts many bars must not hand long indicators a
+    larger warmup window than the documented 300-bar cap.
 
   # SI-3 failure surfacing — strategy dispatch must fail the run exactly like the
   # legacy path. Legacy dispatch runs AFTER the per-instrument try/catch, so an
