@@ -116,6 +116,13 @@ public class MonitoringRunService {
             }
             summary = summary.plusProcessed();
             List<PatternEvent> instrumentEvents = new ArrayList<>();
+            // Strategy alerts detected inside the guarded block are DISPATCHED
+            // outside it (after the catch), in the same position as the legacy
+            // dispatchAlerts call — so an audit-write or retry-enqueue
+            // persistence failure fails the invocation (Lambda retry/DLQ)
+            // instead of being swallowed as an instrument failure
+            // (CLAUDE.md Block 16, SI-3 failure surfacing).
+            List<StrategyDispatch> strategyDispatches = new ArrayList<>();
             Map<Timeframe, Boolean> realEventForTf = new LinkedHashMap<>();
             try {
                 Map<Timeframe, List<OHLCBar>> insertedByTf = ingestionService.ingestInstrument(inst);
@@ -149,7 +156,7 @@ public class MonitoringRunService {
                     Optional<Strategy> strategy = strategies.findByInstrumentId(inst.id());
                     if (strategy.isPresent()) {
                         Optional<StrategyAlert> strategyAlert =
-                                detectionService.detectStrategyAlert(inst, entry.getKey(), haBars);
+                                detectionService.detectStrategyAlert(inst, entry.getKey(), haBars, entry.getValue());
                         if (strategyAlert.isPresent()) {
                             summary = summary.addEvents(1);
                             realEventForTf.merge(entry.getKey(), true, Boolean::logicalOr);
@@ -162,8 +169,8 @@ public class MonitoringRunService {
                                     entry.getKey(),
                                     strategyAlert.get().barTime(),
                                     STRATEGY_CHART_LOOKBACK_BARS);
-                            summary = summary.withDispatch(
-                                    strategyDispatchService.dispatch(strategyAlert.get(), strategy.get(), chartBars));
+                            strategyDispatches.add(
+                                    new StrategyDispatch(strategyAlert.get(), strategy.get(), chartBars));
                             LOG.info(
                                     "main_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
                                     inst.id(),
@@ -206,8 +213,7 @@ public class MonitoringRunService {
                                             .equals(forced.get().barTime()));
                             if (renderable) {
                                 summary = summary.addEvents(1);
-                                summary = summary.withDispatch(
-                                        strategyDispatchService.dispatch(forced.get(), strategy.get(), chartBars));
+                                strategyDispatches.add(new StrategyDispatch(forced.get(), strategy.get(), chartBars));
                                 LOG.info(
                                         "main_forced_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
                                         inst.id(),
@@ -256,7 +262,15 @@ public class MonitoringRunService {
             // Per-instrument dispatch keeps memory flat (no run-wide accumulator)
             // and ensures the soft-timeout cuts cleanly: every successfully
             // processed instrument has its alerts attempted before we ever
-            // consider abandoning the loop.
+            // consider abandoning the loop. Strategy and legacy dispatch both run
+            // OUTSIDE the per-instrument catch-all on purpose: a persistence
+            // failure here (audit write after an accepted email, retry-enqueue
+            // PutItem) must fail the invocation so Lambda retry/DLQ sees it —
+            // an alert is never silently neither-delivered-nor-queued
+            // (CLAUDE.md Block 16, SI-3 failure surfacing).
+            for (StrategyDispatch sd : strategyDispatches) {
+                summary = summary.withDispatch(strategyDispatchService.dispatch(sd.alert(), sd.strategy(), sd.bars()));
+            }
             if (!instrumentEvents.isEmpty()) {
                 DispatchSummary dispatchSummary = dispatchService.dispatchAlerts(instrumentEvents);
                 summary = summary.withDispatch(dispatchSummary);
@@ -393,4 +407,10 @@ public class MonitoringRunService {
                 List.of(forcedLine),
                 clock.instant()));
     }
+
+    /**
+     * A strategy alert detected inside the guarded ingest/detect block, held for
+     * dispatch OUTSIDE it (SI-3 failure surfacing — see {@link #execute}).
+     */
+    private record StrategyDispatch(StrategyAlert alert, Strategy strategy, List<OHLCBar> bars) {}
 }

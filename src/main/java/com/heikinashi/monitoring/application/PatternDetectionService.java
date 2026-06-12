@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -193,7 +194,8 @@ public class PatternDetectionService {
      * the HA series; the latest-bar restriction protects against bootstrap alert
      * storms exactly as the fixed-pattern path does.
      */
-    public Optional<StrategyAlert> detectStrategyAlert(Instrument instrument, Timeframe tf, List<HABar> newHaBars) {
+    public Optional<StrategyAlert> detectStrategyAlert(
+            Instrument instrument, Timeframe tf, List<HABar> newHaBars, List<OHLCBar> newOhlcBars) {
         if (newHaBars.isEmpty()) {
             return Optional.empty();
         }
@@ -213,7 +215,29 @@ public class PatternDetectionService {
         // DSL strings don't expose their periods here, so we use a fixed generous count
         // rather than a computed per-strategy minimum.
         List<OHLCBar> ohlcSeries = ohlc.findLastN(instrument.id(), tf, latest, STRATEGY_LOOKBACK_BARS);
+
+        // Read-consistency (CLAUDE.md Block 16, SI-3): findLastN is an eventually
+        // consistent Query issued immediately after this run wrote the new bars. If
+        // the read lags and omits the just-written bar, the strategy would silently
+        // evaluate the PREVIOUS bar — a missed alert that is never revisited. The
+        // run already holds the freshly ingested bars in memory, so merge them in
+        // (by bar time, ascending) instead of paying for a consistent read.
+        ohlcSeries = mergedByBarTime(ohlcSeries, newOhlcBars);
         return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
+    }
+
+    private static List<OHLCBar> mergedByBarTime(List<OHLCBar> persisted, List<OHLCBar> fresh) {
+        if (fresh.isEmpty()) {
+            return persisted;
+        }
+        TreeMap<Instant, OHLCBar> merged = new TreeMap<>();
+        for (OHLCBar bar : persisted) {
+            merged.put(bar.barTime(), bar);
+        }
+        for (OHLCBar bar : fresh) {
+            merged.put(bar.barTime(), bar);
+        }
+        return new ArrayList<>(merged.values());
     }
 
     private PatternEvent buildEvent(
