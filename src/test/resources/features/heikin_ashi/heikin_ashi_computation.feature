@@ -89,6 +89,28 @@ Feature: Block 4 — Heikin-Ashi computation
     When I compute HA for the active instrument on "1d" with the full OHLC chain
     Then exactly 1 HA bar exists for "AAPL" on "1d"
 
+  # Mid-stream loss (CLAUDE.md Block 4 "SNAPSHOT_ONLY where prev HA was lost
+  # mid-stream"): SNAPSHOT_ONLY truncated the HA chain before this run could
+  # read it. The service must re-seed from the earliest available OHLC bar
+  # using the canonical first-bar formula — never fail or produce a gap. Only
+  # the latest bar stays persisted (snapshot retention); its exact values are
+  # only reachable through a correctly re-seeded chain (seed 102.5/102.5 →
+  # 105.25/112), and the branch announces itself via ha_continuity_broken.
+  Scenario: SNAPSHOT_ONLY recovers when the previous HA chain was truncated before the read
+    Given the storage policy for "AAPL" is set to "SNAPSHOT_ONLY"
+    And the following "1d" OHLC bars exist for "AAPL":
+      | bar_time             | open | high | low | close |
+      | 2026-05-01T00:00:00Z | 100  | 110  | 95  | 105   |
+      | 2026-05-02T00:00:00Z | 105  | 115  | 100 | 112   |
+      | 2026-05-03T00:00:00Z | 112  | 118  | 108 | 110   |
+    And 0 HA bars exist for "AAPL" on "1d"
+    When I compute HA for the active instrument on "1d" with the full OHLC chain
+    Then the returned HA chain has 3 bars
+    And exactly 1 HA bar exists for "AAPL" on "1d"
+    And the HA bar at "2026-05-03T00:00:00Z" has ha_open 105.25
+    And the HA bar at "2026-05-03T00:00:00Z" has ha_close 112
+    And the logs contain a "ha_continuity_broken" line with "1d"
+
   Scenario: Bulk recompute drops existing HA and rebuilds from scratch
     Given the following "1d" OHLC bars exist for "AAPL":
       | bar_time             | open | high | low | close |
