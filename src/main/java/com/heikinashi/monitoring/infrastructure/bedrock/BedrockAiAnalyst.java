@@ -57,8 +57,10 @@ public class BedrockAiAnalyst implements AiAnalyst {
             FORMAT — "corroborating" and "contradicting" must each be a single string of \
             plain prose: flowing sentences an analyst would write. They must NOT be JSON, \
             arrays, objects, key=value pairs, or bullet/numbered lists. Mention the items \
-            inline, in the prose. Only "confidence" is an enum and "data_sources" an array \
-            of strings.
+            inline, in the prose, and separate distinct stories or themes with a blank line \
+            (a paragraph break inside the string) — one continuous wall of text is as \
+            unacceptable as a bullet list. Only "confidence" is an enum and "data_sources" \
+            an array of strings.
 
             RELEVANCE — treat fetched news items as candidates, not as facts about the \
             instrument: provider tagging is loose (a multi-ticker story carries every \

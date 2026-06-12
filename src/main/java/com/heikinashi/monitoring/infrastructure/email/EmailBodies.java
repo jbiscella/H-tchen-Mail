@@ -455,9 +455,15 @@ final class EmailBodies {
                 + ";padding:8px 0 8px 16px;border-bottom:1px solid " + RULE + ";\">" + money(v) + "</td>";
     }
 
+    /**
+     * AI-note paragraph: newlines in the model's prose are paragraph breaks
+     * (the prompt asks for blank lines between distinct stories) and would
+     * otherwise collapse to a space in HTML. Escaping runs BEFORE the
+     * {@code <br>} substitution, so model output cannot inject markup.
+     */
     private static String para(String text) {
         return "<div style=\"" + SANS + "font-size:13px;line-height:1.6;color:" + BODY + ";padding-bottom:4px;\">"
-                + esc(text) + "</div>";
+                + esc(text).replace("\n", "<br>") + "</div>";
     }
 
     /** Four dots, filled up to the confidence level (LOW=1, MEDIUM=2, HIGH=3). */
