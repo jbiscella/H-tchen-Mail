@@ -42,9 +42,13 @@ import org.slf4j.LoggerFactory;
  * partition. The queued item carries no chart: per due item the poller reloads the
  * persisted {@link Strategy} + HA bars and <b>re-renders</b> the chart (falling
  * back to chart-degraded if the strategy is gone or render still fails), re-runs
- * the AI analyst from the stored alert, then sends. On success it records the audit
- * item and deletes; under the cap it bumps; at the cap it sends a degraded email
- * and deletes. All recipients rejected on the final attempt drops the poison item.
+ * the AI analyst from the stored alert, then sends. Each due item is first
+ * <b>claimed</b> (lease) via the conditional retry-count bump — only the claim
+ * winner proceeds, so a double poller run sends exactly one email. On success it
+ * records the audit item and deletes; under the cap it records {@code last_error}
+ * in place (the claim already consumed the attempt); at the cap it sends a
+ * degraded email and deletes. All recipients rejected on the final attempt drops
+ * the poison item.
  */
 @Singleton
 public class StrategyRetryPollerService {
@@ -108,8 +112,23 @@ public class StrategyRetryPollerService {
     }
 
     private PollResult processOne(PendingStrategyAlert pending, PollResult result) {
+        // Claim-before-processing lease (CLAUDE.md §9 "Retry queue mechanics",
+        // mirrored by SI-3c.3): the attempt is consumed up front by the
+        // conditional bump, so a concurrent poller that read the same due
+        // snapshot cannot also send — the loser of the claim is a complete
+        // no-op. A crash after the claim leaves the item scheduled at retry_at
+        // with one attempt consumed (at-least-once delivery preserved).
+        Instant claimTime = clock.instant();
+        PendingStrategyAlert claimed = pending.bumped(claimTime.plus(retryDelay), pending.lastError());
+        if (!pendingAlerts.bumpRetry(claimed, pending.retryCount())) {
+            LOG.info(
+                    "strategy_retry_claim_lost_race instrument_id={} bar_time={}",
+                    pending.alert().instrumentId(),
+                    pending.alert().barTime());
+            return result;
+        }
         result = result.plusProcessed();
-        StrategyAlert alert = pending.alert();
+        StrategyAlert alert = claimed.alert();
 
         Set<String> recipients = recipientsOf(alert.instrumentId());
         if (recipients.isEmpty()) {
@@ -117,11 +136,11 @@ public class StrategyRetryPollerService {
                     "strategy_retry_skip_no_recipients instrument_id={} bar_time={}",
                     alert.instrumentId(),
                     alert.barTime());
-            pendingAlerts.delete(pending.eventUid());
+            pendingAlerts.delete(claimed.eventUid());
             return result;
         }
 
-        Optional<ChartImage> chart = reRenderChart(pending);
+        Optional<ChartImage> chart = reRenderChart(claimed);
 
         Optional<AiAnalysis> analysis;
         try {
@@ -131,16 +150,16 @@ public class StrategyRetryPollerService {
             analysis = Optional.empty();
         }
 
-        boolean lastAttempt = pending.retryCount() + 1 >= maxAttempts;
+        boolean lastAttempt = claimed.retryCount() >= maxAttempts;
         boolean fullyOk = chart.isPresent() && analysis.isPresent();
 
         if (fullyOk) {
-            return sendAndFinish(pending, alert, chart, analysis, recipients, false, result);
+            return sendAndFinish(claimed, alert, chart, analysis, recipients, false, result);
         }
         if (lastAttempt) {
-            return sendAndFinish(pending, alert, chart, analysis, recipients, true, result);
+            return sendAndFinish(claimed, alert, chart, analysis, recipients, true, result);
         }
-        return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
+        return recordFailure(claimed, chart.isEmpty(), analysis.isEmpty(), result);
     }
 
     /**
@@ -191,7 +210,7 @@ public class StrategyRetryPollerService {
     }
 
     private PollResult sendAndFinish(
-            PendingStrategyAlert pending,
+            PendingStrategyAlert claimed,
             StrategyAlert alert,
             Optional<ChartImage> chart,
             Optional<AiAnalysis> analysis,
@@ -210,7 +229,7 @@ public class StrategyRetryPollerService {
             // The mail send itself failed (chart + AI already succeeded); record it
             // against the email/SES dependency, not AI, so backlog diagnostics point
             // at the right thing.
-            return bumpRetry(pending, e.code(), "email", result);
+            return recordFailure(claimed, e.code(), "email", result);
         }
 
         Set<String> delivered = new LinkedHashSet<>();
@@ -223,26 +242,27 @@ public class StrategyRetryPollerService {
         }
         if (delivered.isEmpty()) {
             // SES responded but rejected every recipient. SES being DOWN is the
-            // transient case handled above (exception -> bump). Here the rejection is
-            // a permanent, invalid recipient list: on the final attempt, drop the
-            // poison item instead of bumping it forever (CLAUDE.md §9 Component 1c).
-            boolean lastAttempt = pending.retryCount() + 1 >= maxAttempts;
+            // transient case handled above (exception -> record failure). Here the
+            // rejection is a permanent, invalid recipient list: on the final attempt,
+            // drop the poison item instead of requeueing it forever (CLAUDE.md §9
+            // Component 1c).
+            boolean lastAttempt = claimed.retryCount() >= maxAttempts;
             if (lastAttempt) {
-                pendingAlerts.delete(pending.eventUid());
+                pendingAlerts.delete(claimed.eventUid());
                 LOG.error(
                         "strategy_retry_dropped_all_rejected instrument_id={} bar_time={} retry_count={}",
                         alert.instrumentId(),
                         alert.barTime(),
-                        pending.retryCount());
+                        claimed.retryCount());
                 return result; // dropped (not sent, not requeued); already counted as processed
             }
-            return bumpRetry(pending, "SES_REJECTED", "email", result);
+            return recordFailure(claimed, "SES_REJECTED", "email", result);
         }
 
         // Delete BEFORE auditing: the email is already delivered, so the pending
         // must not survive a transient audit-write failure (it would be retried and
         // re-send a duplicate). Audit is best-effort and never blocks the delete.
-        pendingAlerts.delete(pending.eventUid());
+        pendingAlerts.delete(claimed.eventUid());
         if (auditEnabled) {
             try {
                 auditRepo.recordSentStrategyAlert(alert, enrichment, delivered, messageIds, clock.instant());
@@ -265,27 +285,37 @@ public class StrategyRetryPollerService {
         return result.plusSentFull();
     }
 
-    // Bump for a chart/AI re-render failure (derives the code/component from which
-    // stage failed). SES failures use the explicit overload below so a mail outage
-    // is not mislabeled as an AI failure in retry diagnostics.
-    private PollResult bumpRetry(
-            PendingStrategyAlert pending, boolean chartFailed, boolean aiFailed, PollResult result) {
+    // Failure record for a chart/AI re-render failure (derives the code/component
+    // from which stage failed). SES failures use the explicit overload below so a
+    // mail outage is not mislabeled as an AI failure in retry diagnostics.
+    private PollResult recordFailure(
+            PendingStrategyAlert claimed, boolean chartFailed, boolean aiFailed, PollResult result) {
         String component = chartFailed && aiFailed ? "chart+ai" : (chartFailed ? "chart" : "ai");
         String code = chartFailed ? "CHART_RENDER_FAILED" : "LLM_ERROR";
-        return bumpRetry(pending, code, component, result);
+        return recordFailure(claimed, code, component, result);
     }
 
-    private PollResult bumpRetry(PendingStrategyAlert pending, String code, String component, PollResult result) {
+    /**
+     * Record the real failure on the already-claimed item: the claim consumed
+     * the attempt (retry_count) and set retry_at, so this only replaces
+     * last_error — conditional at the claimed count, no second increment.
+     */
+    private PollResult recordFailure(PendingStrategyAlert claimed, String code, String component, PollResult result) {
         Instant now = clock.instant();
-        PendingStrategyAlert next = pending.bumped(
-                now.plus(retryDelay),
-                new PendingAlert.LastError(code, "transient failure on " + component, now, Optional.of(component)));
-        boolean accepted = pendingAlerts.bumpRetry(next, pending.retryCount());
+        PendingStrategyAlert next = new PendingStrategyAlert(
+                claimed.eventUid(),
+                claimed.alert(),
+                claimed.triggerBar(),
+                claimed.retryCount(),
+                claimed.retryAt(),
+                new PendingAlert.LastError(code, "transient failure on " + component, now, Optional.of(component)),
+                claimed.createdAt());
+        boolean accepted = pendingAlerts.bumpRetry(next, claimed.retryCount());
         if (!accepted) {
             LOG.info(
-                    "strategy_retry_bump_lost_race instrument_id={} bar_time={}",
-                    pending.alert().instrumentId(),
-                    pending.alert().barTime());
+                    "strategy_retry_error_write_lost_race instrument_id={} bar_time={}",
+                    claimed.alert().instrumentId(),
+                    claimed.alert().barTime());
         }
         return result.plusRequeued();
     }

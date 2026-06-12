@@ -34,11 +34,14 @@ import org.slf4j.LoggerFactory;
 /**
  * Block 6 — retry poller (CLAUDE.md §9).
  *
- * <p>For each due {@link PendingAlert}: attempt chart + AI + send. On success,
- * delete the pending item; on failure under {@code maxAttempts}, bump retry
- * via a conditional update; on failure at the {@code maxAttempts} threshold,
- * send a degraded email with whatever components succeeded and delete the
- * pending item.
+ * <p>For each due {@link PendingAlert}: first <b>claim</b> the item (lease) via
+ * the conditional retry-count bump — only the claim winner proceeds, so two
+ * pollers racing on the same due snapshot produce exactly one email; the loser
+ * is a complete no-op. Then attempt chart + AI + send. On success, delete the
+ * pending item; on failure under {@code maxAttempts}, record {@code last_error}
+ * in place (the claim already consumed the attempt); on failure at the
+ * {@code maxAttempts} threshold, send a degraded email with whatever components
+ * succeeded and delete the pending item.
  */
 @Singleton
 public class RetryPollerService {
@@ -91,13 +94,28 @@ public class RetryPollerService {
     }
 
     private PollResult processOne(PendingAlert pending, PollResult result) {
+        // Claim-before-processing lease (CLAUDE.md §9 "Retry queue mechanics"):
+        // the attempt is consumed up front by the conditional bump, so a
+        // concurrent poller that read the same due snapshot cannot also send —
+        // the loser of the claim is a complete no-op. A crash after the claim
+        // leaves the item scheduled at retry_at with one attempt consumed
+        // (at-least-once delivery preserved).
+        Instant claimTime = clock.instant();
+        PendingAlert claimed = pending.bumped(claimTime.plus(retryDelay), pending.lastError());
+        if (!pendingAlerts.bumpRetry(claimed, pending.retryCount())) {
+            LOG.info(
+                    "retry_claim_lost_race instrument_id={} bar_time={}",
+                    pending.event().instrumentId(),
+                    pending.event().barTime());
+            return result;
+        }
         result = result.plusProcessed();
-        PatternEvent event = pending.event();
+        PatternEvent event = claimed.event();
 
         Set<String> recipients = recipientsOf(event);
         if (recipients.isEmpty()) {
             LOG.warn("retry_skip_no_recipients instrument_id={} bar_time={}", event.instrumentId(), event.barTime());
-            pendingAlerts.delete(pending.eventUid());
+            pendingAlerts.delete(claimed.eventUid());
             return result;
         }
 
@@ -117,20 +135,20 @@ public class RetryPollerService {
             analysis = Optional.empty();
         }
 
-        boolean lastAttempt = pending.retryCount() + 1 >= maxAttempts;
+        boolean lastAttempt = claimed.retryCount() >= maxAttempts;
         boolean fullyOk = chart.isPresent() && analysis.isPresent();
 
         if (fullyOk) {
-            return sendAndFinish(pending, event, chart.get(), analysis.get(), recipients, false, result);
+            return sendAndFinish(claimed, event, chart.get(), analysis.get(), recipients, false, result);
         }
         if (lastAttempt) {
-            return sendAndFinish(pending, event, chart.orElse(null), analysis.orElse(null), recipients, true, result);
+            return sendAndFinish(claimed, event, chart.orElse(null), analysis.orElse(null), recipients, true, result);
         }
-        return bumpRetry(pending, chart.isEmpty(), analysis.isEmpty(), result);
+        return recordFailure(claimed, chart.isEmpty(), analysis.isEmpty(), result);
     }
 
     private PollResult sendAndFinish(
-            PendingAlert pending,
+            PendingAlert claimed,
             PatternEvent event,
             ChartImage chart,
             AiAnalysis analysis,
@@ -147,8 +165,8 @@ public class RetryPollerService {
                 deliveries = emailSender.sendFull(event, chart, analysis, recipients);
             }
         } catch (DependencyUnavailableException e) {
-            // Even on the last attempt, if SES itself is down we can't send anything; bump and try later.
-            return bumpRetry(pending, chart == null, analysis == null, result);
+            // Even on the last attempt, if SES itself is down we can't send anything; try again later.
+            return recordFailure(claimed, chart == null, analysis == null, result);
         }
 
         Set<String> delivered = new LinkedHashSet<>();
@@ -160,13 +178,13 @@ public class RetryPollerService {
             }
         }
         if (delivered.isEmpty()) {
-            return bumpRetry(pending, chart == null, analysis == null, result);
+            return recordFailure(claimed, chart == null, analysis == null, result);
         }
 
         if (auditEnabled) {
             auditRepo.recordSentAlert(event, enrichment, delivered, messageIds, clock.instant());
         }
-        pendingAlerts.delete(pending.eventUid());
+        pendingAlerts.delete(claimed.eventUid());
         if (degraded) {
             LOG.info(
                     "retry_sent_degraded instrument_id={} bar_time={} enrichment={}",
@@ -178,22 +196,31 @@ public class RetryPollerService {
         return result.plusSentFull();
     }
 
-    private PollResult bumpRetry(PendingAlert pending, boolean chartFailed, boolean aiFailed, PollResult result) {
+    /**
+     * Record the real failure on the already-claimed item: the claim consumed
+     * the attempt (retry_count) and set retry_at, so this only replaces
+     * last_error — conditional at the claimed count, no second increment.
+     */
+    private PollResult recordFailure(PendingAlert claimed, boolean chartFailed, boolean aiFailed, PollResult result) {
         Instant now = clock.instant();
         String component = chartFailed && aiFailed ? "chart+ai" : (chartFailed ? "chart" : "ai");
-        PendingAlert next = pending.bumped(
-                now.plus(retryDelay),
+        PendingAlert next = new PendingAlert(
+                claimed.eventUid(),
+                claimed.event(),
+                claimed.retryCount(),
+                claimed.retryAt(),
                 new PendingAlert.LastError(
                         chartFailed ? "CHART_RENDER_FAILED" : "LLM_ERROR",
                         "transient failure on " + component,
                         now,
-                        Optional.of(component)));
-        boolean accepted = pendingAlerts.bumpRetry(next, pending.retryCount());
+                        Optional.of(component)),
+                claimed.createdAt());
+        boolean accepted = pendingAlerts.bumpRetry(next, claimed.retryCount());
         if (!accepted) {
             LOG.info(
-                    "retry_bump_lost_race instrument_id={} bar_time={}",
-                    pending.event().instrumentId(),
-                    pending.event().barTime());
+                    "retry_error_write_lost_race instrument_id={} bar_time={}",
+                    claimed.event().instrumentId(),
+                    claimed.event().barTime());
         }
         return result.plusRequeued();
     }
