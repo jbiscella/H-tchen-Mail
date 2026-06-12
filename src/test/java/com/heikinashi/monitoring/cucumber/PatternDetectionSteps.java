@@ -64,6 +64,24 @@ public class PatternDetectionSteps {
         world.configService().updatePattern(world.lastInstrument().id(), "doji", params);
     }
 
+    @Given("an HA bar with no OHLC backing is seeded for {string} on {string} at {string}")
+    public void ha_only_bar_seeded(String ticker, String tfWire, String barTime) {
+        // Deliberately seeds HA WITHOUT the OHLC mirror that ha_bars_seeded_for adds,
+        // reproducing divergent retention (HA survived, the OHLC bar was evicted).
+        Timeframe tf = Timeframe.fromWire(tfWire);
+        Instrument inst = world.repository().findById(world.idByAlias(ticker)).orElseThrow();
+        HABar ha = new HABar(
+                inst.id(),
+                tf,
+                Instant.parse(barTime),
+                new BigDecimal("100"),
+                new BigDecimal("110"),
+                new BigDecimal("95"),
+                new BigDecimal("105"),
+                world.now());
+        world.haRepository().putBar(ha, Optional.empty());
+    }
+
     @Given("the following {string} HA bars are seeded for {string}:")
     public void ha_bars_seeded_for(String tfWire, String ticker, DataTable table) {
         Timeframe tf = Timeframe.fromWire(tfWire);
