@@ -79,3 +79,13 @@ Feature: SI-3c.3 — Strategy alert retry
     And the email sender will reject recipient "alice@example.com"
     When the strategy retry poller runs
     Then the strategy pending alert is deleted
+
+  # Mandatory idempotency (CLAUDE.md Block 8 / SI-3c.3): the claim-before-
+  # processing lease fences the whole attempt — a double poller run on the
+  # same due item sends exactly one email; the loser is a complete no-op.
+  Scenario: Double strategy poller execution on the same due item sends exactly one email
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    When the strategy retry poller runs twice on the same snapshot
+    Then exactly 1 full strategy email is sent
+    And the strategy pending alert is deleted

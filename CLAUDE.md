@@ -1490,13 +1490,13 @@ DynamoDB 400 KB item-size risk of inlining a PNG.
 |------------------------------------------------|-----------------------------------------------------------------------------------|
 | First transient failure (chart / AI / email)   | write `STRATEGY_PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code` (no chart stored) |
 | Poller picks up due items                       | Query GSI2 with `gsi2Pk=RETRY_DUE_STRATEGY` and `gsi2Sk <= now`                   |
-| Poller, per item                                | reload `Strategy` + bars and **re-render** the chart (chart-degraded if the strategy is gone or render still fails); re-run `AiAnalyst.analyze(alert)`; send |
-| On success                                      | record the audit `ALERT` item; DeleteItem `STRATEGY_PENDING_ALERT`               |
-| On failure with `retry_count + 1 < 3`           | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated          |
-| On failure with `retry_count + 1 == 3`          | Send **degraded** email (chart-degraded if render still fails; AI section empty if AI still fails); DeleteItem |
+| Poller, per item                                | **claim first** (lease, as legacy §9): conditional `retry_count++` bump — only the claim winner proceeds; then reload `Strategy` + bars and **re-render** the chart (chart-degraded if the strategy is gone or render still fails); re-run `AiAnalyst.analyze(alert)`; send |
+| On success (claim won)                          | record the audit `ALERT` item; DeleteItem `STRATEGY_PENDING_ALERT`               |
+| On failure with claimed `retry_count < 3`       | update `last_error` in place (conditional write at the claimed `retry_count`, no second increment); `retry_at` stays as set by the claim |
+| On failure with claimed `retry_count == 3`      | Send **degraded** email (chart-degraded if render still fails; AI section empty if AI still fails); DeleteItem |
 | All recipients rejected on the **final** attempt | DeleteItem and give up — an invalid recipient list is permanent, so the poison item is dropped (logged) rather than bumped forever. SES being *down* (a `DependencyUnavailableException`) is transient and still bumps. |
 | No recipients at poll time                       | DeleteItem and skip                                                              |
-| Idempotency / races                             | enqueue `attribute_not_exists(pk)`; bump conditional on `retry_count` — same as legacy |
+| Idempotency / races                             | enqueue `attribute_not_exists(pk)`; claim-before-processing lease conditional on `retry_count` — same as legacy (§9 "Retry queue mechanics"): two pollers that read the same item snapshot send exactly one email; failures after the claim update `last_error` in place without a second increment |
 
 **Chart window.** Both the first-attempt dispatch and the retry re-render read
 the chart's HA bars by the **same lookback as strategy evaluation**
@@ -1585,6 +1585,14 @@ Feature: Strategy alert retry
     And the email sender will reject recipient "alice@example.com"
     When the strategy retry poller runs
     Then the strategy pending alert is deleted
+
+  Scenario: Double strategy poller execution on the same due item sends exactly one email
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    When the strategy retry poller runs twice on the same snapshot
+    Then exactly one full strategy email is sent
+    And the strategy pending alert is deleted
+    And the losing invocation is a complete no-op
 ```
 
 ### Component 2 — AI Analyst (Bedrock Converse + tool-use loop)
@@ -1761,10 +1769,12 @@ Instrument id: {instrument_id}
 |----------------------------------------------|-------------------------------------------------------------------------------|
 | First failure                                | write `PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code` |
 | Poller picks up due items                    | Query GSI2 with `gsi2Pk=RETRY_DUE` and `gsi2Sk <= now` (ISO comparison string) |
-| On success                                   | DeleteItem `PENDING_ALERT`                                                     |
-| On failure with `retry_count + 1 < 3`        | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated       |
-| On failure with `retry_count + 1 == 3`       | Send **degraded** email with whatever components succeeded; DeleteItem `PENDING_ALERT` |
-| Idempotency under double execution           | UpdateItem uses `ConditionExpression="retry_count = :expected"` to prevent races |
+| Claim before processing (lease)              | BEFORE any chart/AI/send work, the poller claims the item: UpdateItem `retry_count++`, `retry_at = now + 1h` with `ConditionExpression="retry_count = :expected"`. Only the claim winner processes the item; a loser (stale `retry_count`, or item already deleted) is a complete no-op — no email, no write, not counted as processed |
+| On success (claim won)                       | DeleteItem `PENDING_ALERT`                                                     |
+| On failure with claimed `retry_count < 3`    | update `last_error` in place (conditional write at the claimed `retry_count`, **no second increment** — the attempt was already consumed by the claim); `retry_at` stays as set by the claim |
+| On failure with claimed `retry_count == 3`   | Send **degraded** email with whatever components succeeded; DeleteItem `PENDING_ALERT` |
+| Idempotency under double execution           | the conditional claim fences the WHOLE attempt, send included: two pollers that read the same item snapshot produce exactly one email and one state transition |
+| Crash safety                                 | a crash after the claim leaves the item scheduled at `retry_at = now + 1h` with one attempt consumed — at-least-once delivery preserved (never claim-by-delete) |
 | SES recipient failure (per-recipient)        | NOT enqueued (recipient-level), just logged                                    |
 
 ### Domain operations (Gherkin)
@@ -1860,9 +1870,11 @@ Feature: Rich Alert Dispatch
     Then those items are NOT picked up
 
   Scenario: Poller idempotency under double execution
-    Given two invocations see the same PENDING_ALERT
-    When both attempt UpdateItem with ConditionExpression="retry_count = :expected"
-    Then only one succeeds; the other is a no-op
+    Given two invocations see the same due PENDING_ALERT snapshot
+    When both run, each first claiming the item via UpdateItem with ConditionExpression="retry_count = :expected"
+    Then only one claim succeeds and that invocation alone proceeds to chart/AI/send
+    And exactly one email is sent and exactly one state transition happens
+    And the losing invocation is a complete no-op (no email, no write)
 
   Scenario: Audit enabled persists ALERT after successful dispatch
     Given audit_enabled=true and dispatch succeeds

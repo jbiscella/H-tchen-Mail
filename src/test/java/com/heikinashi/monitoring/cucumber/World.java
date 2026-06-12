@@ -87,6 +87,9 @@ public final class World {
     private boolean auditEnabled;
     private Duration mainSoftTimeout = Duration.ofMinutes(13);
     private final Map<String, String> instrumentIdByAlias = new HashMap<>();
+    private Clock clock;
+    private RetryConfig retryConfig;
+    private AlertsConfig alertsConfig;
 
     private com.heikinashi.monitoring.domain.strategy.Strategy currentStrategy;
     private com.heikinashi.monitoring.domain.strategy.StrategyAlert currentStrategyAlert;
@@ -124,6 +127,7 @@ public final class World {
 
     public void configureExchanges(Set<String> supported) {
         Clock clock = Clock.fixed(now, ZoneOffset.UTC);
+        this.clock = clock;
         registry = new InstrumentRegistry(repository, clock, uuids, supported);
         configService = new InstrumentConfigService(repository, clock);
         IngestionConfig ingCfg = new IngestionConfig(
@@ -153,8 +157,10 @@ public final class World {
         retryConfig.setMaxAttempts(3);
         retryConfig.setDelaySeconds((int) Duration.ofHours(1).toSeconds());
         retryConfig.setBatchLimit(100);
+        this.retryConfig = retryConfig;
         AlertsConfig alertsConfig = new AlertsConfig();
         alertsConfig.setAuditEnabled(auditEnabled);
+        this.alertsConfig = alertsConfig;
         RunConfig runConfig = new RunConfig();
         runConfig.setSoftTimeoutSeconds((int) mainSoftTimeout.toSeconds());
         alertDispatchService = new AlertDispatchService(
@@ -284,6 +290,42 @@ public final class World {
                     "strategyRetryPollerService not initialised; call configureExchanges first");
         }
         return strategyRetryPollerService;
+    }
+
+    /**
+     * A second poller instance over a caller-supplied pending repository —
+     * used to model a concurrent poller that read a stale due-item snapshot
+     * (the snapshot repo serves the old queryDue view, writes hit the real
+     * store).
+     */
+    public RetryPollerService retryPollerServiceOver(com.heikinashi.monitoring.domain.PendingAlertRepository pending) {
+        return new RetryPollerService(
+                repository,
+                chartRenderer,
+                aiAnalyst,
+                emailSender,
+                pending,
+                auditRepo,
+                clock,
+                retryConfig,
+                alertsConfig);
+    }
+
+    /** Strategy-poller twin of {@link #retryPollerServiceOver}. */
+    public StrategyRetryPollerService strategyRetryPollerServiceOver(
+            com.heikinashi.monitoring.domain.PendingStrategyAlertRepository pending) {
+        return new StrategyRetryPollerService(
+                repository,
+                strategyRepository,
+                strategyChartRenderer,
+                ohlcRepository,
+                aiAnalyst,
+                emailSender,
+                pending,
+                auditRepo,
+                clock,
+                retryConfig,
+                alertsConfig);
     }
 
     public InMemoryPendingStrategyAlertRepository pendingStrategyAlerts() {

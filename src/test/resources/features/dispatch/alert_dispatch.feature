@@ -118,6 +118,25 @@ Feature: Block 6 — alert dispatch and retry orchestration
     Then the dispatch summary has sent=1, queued=0, skipped=0
     And the audit repository has 1 entry with enrichment "full" and 2 recipients
 
+  # Mandatory idempotency (CLAUDE.md Block 8 / §9 "Retry queue mechanics"):
+  # concurrent or duplicate poller execution on the same PENDING_ALERT is
+  # fenced by the claim-before-processing lease — the conditional retry_count
+  # bump happens BEFORE chart/AI/send, so the loser of the race is a complete
+  # no-op. A double run produces exactly one email and one state transition.
+  Scenario: Double poller execution on the same due item sends exactly one email
+    Given a pending alert exists for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal" and retry_at "2026-05-07T21:00:00Z" and retry_count 0
+    When I run the retry poller twice on the same snapshot
+    Then the email sender recorded 1 full send for 2 recipients
+    And no alerts are pending
+
+  Scenario: Double poller execution under failure bumps the retry count exactly once
+    Given a pending alert exists for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal" and retry_at "2026-05-07T21:00:00Z" and retry_count 0
+    And the chart renderer will fail the next 2 calls
+    And the AI analyst will fail the next 2 calls
+    When I run the retry poller twice on the same snapshot
+    Then no email is sent
+    And 1 alert is pending with retry_count 1
+
   Scenario: Idempotent enqueue — double dispatch of same event keeps the original retry state
     Given a staged pattern event for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal"
     And the chart renderer will fail the next 2 calls
