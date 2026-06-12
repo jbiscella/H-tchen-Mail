@@ -1,6 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.marketaux;
 
 import com.heikinashi.monitoring.domain.Timeframe;
+import com.heikinashi.monitoring.infrastructure.news.RecencyWindowSource;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -18,7 +19,7 @@ import jakarta.validation.constraints.NotBlank;
  * env vars (wired from the {@code MARKETAUX_RECENCY_DAYS_1D/1W} GitHub vars).
  */
 @ConfigurationProperties("monitoring.marketaux")
-public class MarketauxConfig {
+public class MarketauxConfig implements RecencyWindowSource {
 
     @NotBlank
     private String apiKey;
@@ -76,6 +77,7 @@ public class MarketauxConfig {
     }
 
     /** The {@code published_after} look-back window, in days, for the given pattern timeframe. */
+    @Override
     public int recencyDays(Timeframe tf) {
         return switch (tf) {
             case D1 -> recencyDays1d;

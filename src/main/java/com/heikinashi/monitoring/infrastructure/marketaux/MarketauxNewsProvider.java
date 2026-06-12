@@ -21,7 +21,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -79,8 +78,7 @@ public class MarketauxNewsProvider implements NewsProvider {
     @Override
     public List<NewsHeadline> fetchNewsHeadlines(String ticker, String exchange, int max, Timeframe tf) {
         String symbol = NewsSymbols.forExchange(ticker, exchange, suffixMap);
-        LocalDate publishedAfter =
-                LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC).minusDays(config.recencyDays(tf));
+        LocalDate publishedAfter = config.publishedAfter(clock, tf);
         URI uri = buildUri(symbol, max, publishedAfter);
         long t0 = System.currentTimeMillis();
         HttpResponse<String> response;
