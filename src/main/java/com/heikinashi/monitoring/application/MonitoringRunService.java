@@ -163,11 +163,18 @@ public class MonitoringRunService {
                             // Raw OHLC for the strategy chart: heerwisch draws the
                             // candles Heikin-Ashi (CandleStyle.HEIKIN_ASHI) while the
                             // overlays read the raw close, matching the rule engine
-                            // (CLAUDE.md §9 Component 1b).
-                            List<OHLCBar> chartBars = ohlcRepository.findLastN(
-                                    inst.id(),
-                                    entry.getKey(),
-                                    strategyAlert.get().barTime(),
+                            // (CLAUDE.md §9 Component 1b). Same fresh-bar merge as
+                            // evaluation: under a lagging read the window would miss
+                            // the trigger bar — the marker would fail heerwisch V7 and
+                            // a correctly detected alert would degrade onto the retry
+                            // queue with no trigger snapshot (CLAUDE.md Block 16, SI-3).
+                            List<OHLCBar> chartBars = PatternDetectionService.mergedByBarTime(
+                                    ohlcRepository.findLastN(
+                                            inst.id(),
+                                            entry.getKey(),
+                                            strategyAlert.get().barTime(),
+                                            STRATEGY_CHART_LOOKBACK_BARS),
+                                    entry.getValue(),
                                     STRATEGY_CHART_LOOKBACK_BARS);
                             strategyDispatches.add(
                                     new StrategyDispatch(strategyAlert.get(), strategy.get(), chartBars));
