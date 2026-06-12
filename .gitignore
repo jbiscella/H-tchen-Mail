@@ -104,3 +104,10 @@ jacoco.exec
 
 # jqwik failure-replay DB
 .jqwik-database
+
+# Stray local artifacts swept in by a broad `git add` — never track (PR #80 hygiene).
+# These are scratch notes / ad-hoc scripts that do not belong in the source tree.
+/lambda invoke \\
+/scripts/register-instrument.sh
+/src/main/java/com/heikinashi/monitoring/domain/15.json
+/src/main/java/com/heikinashi/monitoring/domain/# AI Collaboration Retrospective — ha-tr.md
