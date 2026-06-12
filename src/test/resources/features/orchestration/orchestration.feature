@@ -210,6 +210,24 @@ Feature: Block 7 — monitoring-main pipeline orchestration
     And a strategy email is sent to "alice@example.com"
     And the forced strategy alert carries a single honest "forced" line
 
+  # A forced strategy alert needs the OHLC bar that carries its marker. If HA exists
+  # at the trigger time but the OHLC bar was evicted (divergent retention), the chart
+  # cannot render that marker (heerwisch V7), so the synthesis is skipped — mirroring
+  # the pattern path's OHLC guard rather than dispatching an un-renderable alert.
+  Scenario: force_email on a strategy instrument skips when the OHLC bar backing the trigger is gone
+    Given an instrument "AAPL" on "NASDAQ" already exists
+    And the recipients for "AAPL" are "alice@example.com"
+    And the tracked timeframes for "AAPL" are "1d"
+    And the instrument is monitored by a strategy whose scenario "entry" has conditions:
+      | close is above 100 |
+    And an HA bar with no OHLC backing is seeded for "AAPL" on "1d" at "2026-05-06T00:00:00Z"
+    And the provider has no bars for any symbol
+    When I run monitoring-main with force_email true
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 0 events detected
+    And the main summary reports 0 alerts sent
+    And the strategy chart renderer is not invoked
+
   Scenario: Default payload still does not send when no pattern fires
     Given an instrument "AAPL" on "NASDAQ" already exists
     And the recipients for "AAPL" are "alice@example.com"

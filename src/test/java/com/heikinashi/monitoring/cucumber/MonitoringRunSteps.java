@@ -118,6 +118,13 @@ public class MonitoringRunSteps {
                 .isZero();
     }
 
+    @Then("the strategy chart renderer is not invoked")
+    public void strategy_chart_renderer_not_invoked() {
+        assertThat(world.strategyChartRenderer().callCount())
+                .as("strategy chart must not render when no OHLC bar backs the trigger")
+                .isZero();
+    }
+
     @Then("the forced strategy alert carries a single honest {string} line")
     public void forced_strategy_alert_single_honest_line(String marker) {
         var alert = world.strategyChartRenderer().lastAlert();

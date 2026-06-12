@@ -193,9 +193,18 @@ public class MonitoringRunService {
                         if (Boolean.TRUE.equals(realEventForTf.get(tf))) continue;
                         if (strategy.isPresent()) {
                             Optional<StrategyAlert> forced = buildForcedStrategyAlert(inst, tf, strategy.get());
-                            if (forced.isPresent()) {
-                                List<OHLCBar> chartBars = ohlcRepository.findLastN(
-                                        inst.id(), tf, forced.get().barTime(), STRATEGY_CHART_LOOKBACK_BARS);
+                            // The chart marker sits on the trigger bar, so the OHLC bar
+                            // backing it must be present (heerwisch V7). If only the HA
+                            // bar survived (divergent retention), skip rather than dispatch
+                            // an un-renderable alert — mirroring buildForcedEvent's OHLC
+                            // guard on the pattern path.
+                            List<OHLCBar> chartBars = forced.map(a -> ohlcRepository.findLastN(
+                                            inst.id(), tf, a.barTime(), STRATEGY_CHART_LOOKBACK_BARS))
+                                    .orElseGet(List::of);
+                            boolean renderable = forced.isPresent()
+                                    && chartBars.stream().anyMatch(b -> b.barTime()
+                                            .equals(forced.get().barTime()));
+                            if (renderable) {
                                 summary = summary.addEvents(1);
                                 summary = summary.withDispatch(
                                         strategyDispatchService.dispatch(forced.get(), strategy.get(), chartBars));

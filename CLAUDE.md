@@ -2020,7 +2020,9 @@ Feature: Scheduling and Orchestration
     And the strategy chart marks the bar with a neutral highlight labelled "forced"
       (the role-derived marker falls through to a bar highlight — no entry/exit glyph,
       because nothing actually fired)
-    And when no persisted bar exists yet, the synthesis is silently skipped with a WARN log
+    And when no persisted OHLC bar backs the trigger time, the synthesis is silently
+      skipped with a WARN log (the chart marker sits on that bar, so without it the
+      chart cannot render — mirroring the pattern path's OHLC guard)
     Note: a strategy instrument's manual smoke stays faithful to what a real strategy
     alert email looks like (strategy chart with scenario-derived overlays + strategy
     email body), instead of degrading to a generic pattern chart on the legacy path.
