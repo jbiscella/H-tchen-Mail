@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -193,7 +194,8 @@ public class PatternDetectionService {
      * the HA series; the latest-bar restriction protects against bootstrap alert
      * storms exactly as the fixed-pattern path does.
      */
-    public Optional<StrategyAlert> detectStrategyAlert(Instrument instrument, Timeframe tf, List<HABar> newHaBars) {
+    public Optional<StrategyAlert> detectStrategyAlert(
+            Instrument instrument, Timeframe tf, List<HABar> newHaBars, List<OHLCBar> newOhlcBars) {
         if (newHaBars.isEmpty()) {
             return Optional.empty();
         }
@@ -213,7 +215,39 @@ public class PatternDetectionService {
         // DSL strings don't expose their periods here, so we use a fixed generous count
         // rather than a computed per-strategy minimum.
         List<OHLCBar> ohlcSeries = ohlc.findLastN(instrument.id(), tf, latest, STRATEGY_LOOKBACK_BARS);
+
+        // Read-consistency (CLAUDE.md Block 16, SI-3): findLastN is an eventually
+        // consistent Query issued immediately after this run wrote the new bars. If
+        // the read lags and omits the just-written bar, the strategy would silently
+        // evaluate the PREVIOUS bar — a missed alert that is never revisited. The
+        // run already holds the freshly ingested bars in memory, so merge them in
+        // (by bar time, ascending) instead of paying for a consistent read. The
+        // merge stays capped at the documented lookback: an outage catch-up that
+        // inserts many bars must not hand long indicators a larger warmup window.
+        ohlcSeries = mergedByBarTime(ohlcSeries, newOhlcBars, STRATEGY_LOOKBACK_BARS);
         return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
+    }
+
+    /**
+     * Merges {@code fresh} into {@code persisted} by bar time (ascending, fresh
+     * wins on a duplicate time) and trims the OLDEST entries so the result never
+     * exceeds {@code cap} — the read-consistency merge used for both strategy
+     * evaluation and the strategy chart lookback (CLAUDE.md Block 16, SI-3).
+     * Package-visible for {@link MonitoringRunService}.
+     */
+    static List<OHLCBar> mergedByBarTime(List<OHLCBar> persisted, List<OHLCBar> fresh, int cap) {
+        if (fresh.isEmpty() && persisted.size() <= cap) {
+            return persisted;
+        }
+        TreeMap<Instant, OHLCBar> merged = new TreeMap<>();
+        for (OHLCBar bar : persisted) {
+            merged.put(bar.barTime(), bar);
+        }
+        for (OHLCBar bar : fresh) {
+            merged.put(bar.barTime(), bar);
+        }
+        List<OHLCBar> out = new ArrayList<>(merged.values());
+        return out.size() <= cap ? out : new ArrayList<>(out.subList(out.size() - cap, out.size()));
     }
 
     private PatternEvent buildEvent(

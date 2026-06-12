@@ -1340,7 +1340,7 @@ Increments:
 - **SI-3b** — suppression: an instrument with a strategy no longer emits the legacy fixed-pattern alerts (Block 15). DONE.
 - **SI-3c.1** — render the `StrategyChartSpec` to PNG via a dedicated `StrategyChartRenderer` (domain port) backed by the heerwisch driver.
 - **SI-3c** — dedicated dispatch of a `StrategyAlert`: chart (SI-3c.1) → AI → email → retry/audit, via `StrategyAlert`-aware port overloads (dispatch fork "A", faithful: preserves all matched lines / roles / memo).
-- **SI-3 (orchestration)** — `MonitoringRunService` calls `detectStrategyAlert` for strategy instruments and routes the `StrategyAlert` to the dedicated dispatch.
+- **SI-3 (orchestration)** — `MonitoringRunService` calls `detectStrategyAlert` for strategy instruments and routes the `StrategyAlert` to the dedicated dispatch. Placement rule (parity with legacy): detection and the chart-lookback read run INSIDE the per-instrument try/catch; the `strategyDispatchService.dispatch(...)` call (real and forced alerts alike) runs OUTSIDE it, next to the legacy `dispatchAlerts`, so an audit-write or retry-enqueue persistence failure fails the invocation (Lambda retry/DLQ) instead of being swallowed as an instrument failure. Evaluation merges the freshly ingested OHLC bars into the persisted `findLastN` series, so an eventually-consistent read can never make the strategy evaluate a stale latest bar (Block 16 SI-3 scenarios).
 - **SI-3a** — strategy persistence: a `STRATEGY` item (§2) + `DynamoDbStrategyRepository` replacing the `NoOp`. The item stores the verbatim importer JSON; `findByInstrumentId` reparses via `StrategyJsonImporter.fromJson`, `save` is an idempotent `PutItem`.
 - **SI-3c.3** — retry for strategy alerts: a `STRATEGY_PENDING_ALERT` item (§2) storing the StrategyAlert JSON (no chart), enqueued on a failed dispatch and recovered by a `StrategyRetryPollerService` that **re-renders** the chart from the persisted `Strategy` + bars, re-runs AI, re-sends, audits, and degrades after the cap. See Component 1c "Retry for strategy alerts".
 
@@ -2735,6 +2735,51 @@ Feature: Monitor an imported strategy, stateless
     Then the strategy alert is dispatched via the dedicated strategy dispatch (chart + AI + email)
     And no legacy fixed-pattern alert is produced for it
     And the run counts it among alerts sent
+
+  # SI-3 read-consistency — strategy evaluation must see the bar the run just wrote.
+  # DynamoDB findLastN is an eventually consistent Query; read-after-write
+  # immediately after ingestion is exactly where it can lag and omit the
+  # just-written bar, silently evaluating (and possibly re-alerting) the PREVIOUS
+  # bar — and the missed bar is never revisited. The freshly ingested OHLC bars
+  # are therefore merged into the persisted series before evaluation (the run
+  # already holds them in memory; no consistent-read cost).
+  Scenario: Strategy evaluation sees the freshly ingested bar even when the persisted read lags
+    Given an instrument monitored by a strategy whose scenario matches on the latest bar
+    And the persisted OHLC read lags behind the just-ingested bar
+    When monitoring-main runs
+    Then the strategy is evaluated against the just-ingested latest bar, not the stale tail
+    And the strategy alert carries the just-ingested bar's time
+    And the chart window handed to the strategy renderer contains the trigger bar
+    Note: the merge applies to BOTH reads — evaluation (else the alert is missed)
+    and the chart lookback (else the marker bar is absent from the series, the
+    render fails V7 and a correctly detected alert degrades onto the retry queue
+    with no trigger-bar snapshot, instead of a first-attempt email). The merged
+    series stays capped at STRATEGY_LOOKBACK_BARS (trimmed from the oldest side):
+    an outage catch-up that inserts many bars must not hand long indicators a
+    larger warmup window than the documented 300-bar cap.
+
+  # SI-3 failure surfacing — strategy dispatch must fail the run exactly like the
+  # legacy path. Legacy dispatch runs AFTER the per-instrument try/catch, so an
+  # audit-write failure (email already accepted) or a retry-enqueue PutItem
+  # failure propagates out of the handler → the invocation errors → Lambda
+  # retry/DLQ. Strategy dispatch (real and forced alerts alike) follows the same
+  # placement: detection/chart-read stay inside the guarded ingest/detect block;
+  # dispatch happens outside it. An alert is never silently neither-delivered-
+  # nor-queued.
+  Scenario: A strategy audit-write failure after a delivered email fails the run like legacy
+    Given audit is enabled
+    And an instrument monitored by a strategy whose scenario matches on the latest bar
+    And the audit write will fail
+    When monitoring-main runs
+    Then the strategy email is still sent
+    And the run fails with the audit error (it is not swallowed as an instrument failure)
+
+  Scenario: A strategy retry-enqueue failure fails the run like legacy
+    Given an instrument monitored by a strategy whose scenario matches on the latest bar
+    And the chart renderer will fail transiently
+    And the strategy pending-alert write will fail
+    When monitoring-main runs
+    Then the run fails with the persistence error (the alert is not silently lost)
 ```
 
 **Operational invariants**

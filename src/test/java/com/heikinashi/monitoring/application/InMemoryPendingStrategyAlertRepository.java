@@ -14,9 +14,19 @@ import java.util.Optional;
 public final class InMemoryPendingStrategyAlertRepository implements PendingStrategyAlertRepository {
 
     private final Map<String, PendingStrategyAlert> byUid = new HashMap<>();
+    private boolean failNextWrite;
+
+    /** Scripts the next {@link #enqueue} to throw, like a DynamoDB PutItem outage. */
+    public void failNextWrite() {
+        this.failNextWrite = true;
+    }
 
     @Override
     public void enqueue(PendingStrategyAlert pending) {
+        if (failNextWrite) {
+            failNextWrite = false;
+            throw new RuntimeException("scripted pending-strategy PutItem failure");
+        }
         byUid.putIfAbsent(pending.eventUid(), pending);
     }
 

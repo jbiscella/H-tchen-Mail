@@ -44,6 +44,16 @@ public class MonitoringRunSteps {
                 world.monitoringRunService().execute(MainInput.allActive().withForceEmail(true)));
     }
 
+    @When("I run monitoring-main expecting failure")
+    public void i_run_monitoring_main_expecting_failure() {
+        world.clearException();
+        try {
+            world.setLastMainSummary(world.monitoringRunService().execute(MainInput.allActive()));
+        } catch (RuntimeException e) {
+            world.setLastException(e);
+        }
+    }
+
     @When("I run monitoring-main for instruments {string}")
     public void i_run_monitoring_main_for_instruments(String csv) {
         Set<String> ids = parseTickers(csv).stream()
@@ -123,6 +133,44 @@ public class MonitoringRunSteps {
         assertThat(world.strategyChartRenderer().callCount())
                 .as("strategy chart must not render when no OHLC bar backs the trigger")
                 .isZero();
+    }
+
+    @Given("the persisted OHLC read lags behind the just-ingested bar")
+    public void persisted_ohlc_read_lags() {
+        world.ohlcRepository().simulateReadLag(1);
+    }
+
+    @Given("the strategy chart renderer will fail the next {int} calls")
+    public void strategy_chart_renderer_fails_next(int n) {
+        world.strategyChartRenderer().failNext(n);
+    }
+
+    @Given("the strategy pending-alert write will fail")
+    public void strategy_pending_alert_write_fails() {
+        world.pendingStrategyAlerts().failNextWrite();
+    }
+
+    @Then("the run fails with an unhandled error")
+    public void run_fails_with_unhandled_error() {
+        assertThat(world.lastException())
+                .as("the persistence failure must escape the per-instrument guard (legacy parity)")
+                .isNotNull();
+    }
+
+    @Then("the dispatched strategy alert carries bar time {string}")
+    public void dispatched_strategy_alert_carries_bar_time(String barTime) {
+        var alert = world.strategyChartRenderer().lastAlert();
+        assertThat(alert).as("a strategy alert reached the strategy chart").isNotNull();
+        assertThat(alert.barTime()).isEqualTo(java.time.Instant.parse(barTime));
+    }
+
+    @Then("the strategy chart window contains the trigger bar")
+    public void strategy_chart_window_contains_trigger_bar() {
+        var alert = world.strategyChartRenderer().lastAlert();
+        assertThat(alert).as("a strategy alert reached the strategy chart").isNotNull();
+        assertThat(world.strategyChartRenderer().lastBars())
+                .as("the chart lookback must include the marker's trigger bar (heerwisch V7)")
+                .anyMatch(b -> b.barTime().equals(alert.barTime()));
     }
 
     @Then("the forced strategy alert carries a single honest {string} line")

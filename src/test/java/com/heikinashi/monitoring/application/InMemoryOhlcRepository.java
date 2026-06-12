@@ -17,6 +17,17 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
 
     private final Map<String, TreeMap<Instant, OHLCBar>> byKey = new HashMap<>();
     private final Map<String, Long> ttlByKey = new HashMap<>();
+    private int readLagBars;
+
+    /**
+     * Simulates DynamoDB eventual consistency on {@link #findLastN}: the newest
+     * {@code bars} entries are omitted from reads, as a lagging replica would —
+     * the read-after-write race strategy evaluation must survive (CLAUDE.md
+     * Block 16, SI-3 read-consistency).
+     */
+    public void simulateReadLag(int bars) {
+        this.readLagBars = bars;
+    }
 
     @Override
     public Optional<OHLCBar> findLatest(String instrumentId, Timeframe tf) {
@@ -57,6 +68,9 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
             return List.of();
         }
         List<OHLCBar> headView = new ArrayList<>(bars.headMap(toInclusive, true).values());
+        if (readLagBars > 0) {
+            headView = headView.subList(0, Math.max(0, headView.size() - readLagBars));
+        }
         int from = Math.max(0, headView.size() - n);
         return new ArrayList<>(headView.subList(from, headView.size()));
     }
