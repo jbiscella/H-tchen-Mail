@@ -1641,7 +1641,16 @@ FORMAT (readability increment, 2026-06-12): "corroborating" and
 "contradicting" are each a single string of flowing prose — never JSON,
 arrays, key=value pairs, or bullet/numbered lists — but distinct stories or
 themes MUST be separated by a blank line (a paragraph break inside the
-string). One continuous wall of text is as unacceptable as a bullet list.
+string, written as the escaped \n\n sequence valid inside a JSON string —
+never a raw line break, which would make the JSON invalid). One continuous
+wall of text is as unacceptable as a bullet list.
+
+Parser resilience (Codex P2 on PR #85): even with the escaped-sequence
+instruction, a model may emit a literal line break inside the string. The
+response parser MUST tolerate unescaped control characters inside JSON
+string literals (Jackson ALLOW_UNESCAPED_CONTROL_CHARS) so a raw paragraph
+break degrades to nothing worse than a correctly parsed newline — the AI
+note must never be lost to the readability instruction itself.
 
 USER:
 Pattern detected:
