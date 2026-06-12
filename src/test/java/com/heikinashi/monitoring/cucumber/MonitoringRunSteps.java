@@ -164,6 +164,15 @@ public class MonitoringRunSteps {
         assertThat(alert.barTime()).isEqualTo(java.time.Instant.parse(barTime));
     }
 
+    @Then("the strategy chart window contains the trigger bar")
+    public void strategy_chart_window_contains_trigger_bar() {
+        var alert = world.strategyChartRenderer().lastAlert();
+        assertThat(alert).as("a strategy alert reached the strategy chart").isNotNull();
+        assertThat(world.strategyChartRenderer().lastBars())
+                .as("the chart lookback must include the marker's trigger bar (heerwisch V7)")
+                .anyMatch(b -> b.barTime().equals(alert.barTime()));
+    }
+
     @Then("the forced strategy alert carries a single honest {string} line")
     public void forced_strategy_alert_single_honest_line(String marker) {
         var alert = world.strategyChartRenderer().lastAlert();

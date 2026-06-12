@@ -49,6 +49,7 @@ Feature: SI-3 — Strategy orchestration in monitoring-main
     When I run monitoring-main
     Then the main summary reports 1 alerts sent
     And the dispatched strategy alert carries bar time "2026-05-06T00:00:00Z"
+    And the strategy chart window contains the trigger bar
 
   # SI-3 failure surfacing (CLAUDE.md Block 16): strategy dispatch persistence
   # failures fail the run exactly like the legacy path — never swallowed as an
