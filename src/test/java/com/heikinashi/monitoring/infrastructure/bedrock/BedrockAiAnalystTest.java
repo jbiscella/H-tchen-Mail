@@ -114,6 +114,9 @@ class BedrockAiAnalystTest {
         assertThat(system).containsIgnoringCase("candidates");
         assertThat(system).containsIgnoringCase("promotional");
         assertThat(system.indexOf("RELEVANCE")).isLessThan(system.indexOf("CORROBORATING"));
+        // Readability increment: the FORMAT block must ask for blank-line
+        // paragraph breaks between distinct stories (still banning lists).
+        assertThat(system).containsIgnoringCase("blank line");
     }
 
     @Test

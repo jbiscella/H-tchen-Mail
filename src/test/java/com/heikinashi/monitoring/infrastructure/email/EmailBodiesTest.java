@@ -67,6 +67,30 @@ class EmailBodiesTest {
     }
 
     @Test
+    void html_body_renders_AI_note_newlines_as_br_after_escaping() {
+        AiAnalysis multiParagraph = new AiAnalysis(
+                Optional.of("First story about earnings.\n\nSecond story about <guidance>."),
+                Optional.of("Sector beta is high."),
+                AiConfidence.MEDIUM,
+                List.of("news_headlines(5)"));
+        String html = EmailBodies.html(EVENT, Optional.empty(), Optional.of(multiParagraph), AlertEnrichment.FULL);
+        assertThat(html).contains("First story about earnings.<br><br>Second story about &lt;guidance&gt;.");
+        // Raw newlines must not survive inside the rendered paragraph (they collapse in HTML).
+        assertThat(html).doesNotContain("earnings.\n\nSecond");
+    }
+
+    @Test
+    void plain_text_body_keeps_AI_note_newlines_verbatim() {
+        AiAnalysis multiParagraph = new AiAnalysis(
+                Optional.of("First story.\n\nSecond story."),
+                Optional.empty(),
+                AiConfidence.MEDIUM,
+                List.of("news_headlines(5)"));
+        String text = EmailBodies.plainText(EVENT, Optional.of(multiParagraph));
+        assertThat(text).contains("First story.\n\nSecond story.");
+    }
+
+    @Test
     void html_body_with_chart_includes_inline_cid_image_tag() {
         String html = EmailBodies.html(EVENT, Optional.of("img-1"), Optional.of(ANALYSIS), AlertEnrichment.FULL);
         assertThat(html).contains("<img src=\"cid:img-1\"");
