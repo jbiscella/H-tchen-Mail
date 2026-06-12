@@ -73,13 +73,13 @@ public class PatternDetectionService {
         if (newHaBars.isEmpty()) {
             return List.of();
         }
-        // NOTE: Block 15 envisages a strategy *superseding* the three fixed patterns
-        // for its instrument. That coupling is deliberately NOT applied here yet:
-        // the strategy path (detectStrategyAlert) is not dispatched anywhere, so
-        // suppressing the legacy alerts on strategy presence would mean an instrument
-        // with a strategy emits no alerts at all once a real StrategyRepository
-        // replaces the NoOp. Legacy detection therefore runs regardless of strategy
-        // presence until strategy dispatch is wired (PR #79 review P1).
+        // Block 15 — a strategy supersedes the three fixed patterns for its
+        // instrument: once an instrument is monitored by an imported strategy it
+        // no longer emits the legacy color_change / strong_candle / doji alerts;
+        // only the strategy's scenarios can raise alerts (via detectStrategyAlert).
+        if (strategies.findByInstrumentId(instrument.id()).isPresent()) {
+            return List.of();
+        }
         InstrumentConfig cfg = instruments
                 .findConfigById(instrument.id())
                 .orElseThrow(() -> new InstrumentNotFoundException(instrument.id()));
@@ -206,27 +206,14 @@ public class PatternDetectionService {
         sortedNew.sort(Comparator.comparing(HABar::barTime));
         Instant latest = sortedNew.get(sortedNew.size() - 1).barTime();
 
-        // Read a generous raw-OHLC window (ending at the latest ingested bar) so the
-        // strategy's dsl-eval indicators have room to warm up. The DSL strings don't
-        // expose their periods here, so we use a fixed window rather than a computed
-        // minimum.
-        //
-        // TODO(PR #79 review #5): this subtracts calendar seconds, so for D1 it yields
-        // ~200 trading bars over ~300 calendar days and can starve a long indicator
-        // (e.g. rsi(250)) of warmup. When the strategy path is actually wired/dispatched,
-        // switch to a bar-counted read (last N persisted bars, as wichtelm does via
-        // barsStrictlyBefore) and validate against real bars. Inert today: this path is
-        // unreachable while the StrategyRepository is the NoOp.
-        Instant from = latest.minusSeconds((long) STRATEGY_LOOKBACK_BARS * periodSeconds(tf));
-        List<OHLCBar> ohlcSeries = ohlc.findRange(instrument.id(), tf, from, latest);
+        // Read the last STRATEGY_LOOKBACK_BARS persisted OHLC bars BY COUNT (ending at
+        // the latest ingested bar) so the strategy's dsl-eval indicators have room to
+        // warm up. Bar-counted — not a calendar window — so market-closure gaps don't
+        // shrink the warmup window and starve a long indicator such as rsi(250). The
+        // DSL strings don't expose their periods here, so we use a fixed generous count
+        // rather than a computed per-strategy minimum.
+        List<OHLCBar> ohlcSeries = ohlc.findLastN(instrument.id(), tf, latest, STRATEGY_LOOKBACK_BARS);
         return strategyDetector.evaluateLatest(instrument, tf, strategy.get(), ohlcSeries, clock.instant());
-    }
-
-    private static long periodSeconds(Timeframe tf) {
-        return switch (tf) {
-            case D1 -> 86_400L;
-            case W1 -> 604_800L;
-        };
     }
 
     private PatternEvent buildEvent(

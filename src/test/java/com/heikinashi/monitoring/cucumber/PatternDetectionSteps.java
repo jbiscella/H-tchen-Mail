@@ -9,6 +9,8 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
+import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
 import io.cucumber.datatable.DataTable;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -33,6 +35,14 @@ public class PatternDetectionSteps {
 
     // -------- Given -----------------------------------------------------------
 
+    @Given("the instrument is monitored by a strategy whose scenario {string} has conditions:")
+    public void instrument_monitored_by_strategy(String scenarioName, DataTable table) {
+        StrategyScenario scenario = new StrategyScenario(
+                scenarioName, "long_entry", table.asList(), Optional.empty(), Optional.empty(), Optional.empty());
+        Strategy strategy = new Strategy("test-strategy", List.of(scenario));
+        world.strategyRepository().put(world.lastInstrument().id(), strategy);
+    }
+
     @Given("the color_change pattern is enabled with min_streak_length {int}")
     public void enable_color_change(int minStreakLength) {
         Map<String, Object> params = Map.of("enabled", "true", "min_streak_length", String.valueOf(minStreakLength));
@@ -52,6 +62,24 @@ public class PatternDetectionSteps {
     public void enable_doji(BigDecimal maxBodyRatio) {
         Map<String, Object> params = Map.of("enabled", "true", "max_body_ratio", maxBodyRatio.toPlainString());
         world.configService().updatePattern(world.lastInstrument().id(), "doji", params);
+    }
+
+    @Given("an HA bar with no OHLC backing is seeded for {string} on {string} at {string}")
+    public void ha_only_bar_seeded(String ticker, String tfWire, String barTime) {
+        // Deliberately seeds HA WITHOUT the OHLC mirror that ha_bars_seeded_for adds,
+        // reproducing divergent retention (HA survived, the OHLC bar was evicted).
+        Timeframe tf = Timeframe.fromWire(tfWire);
+        Instrument inst = world.repository().findById(world.idByAlias(ticker)).orElseThrow();
+        HABar ha = new HABar(
+                inst.id(),
+                tf,
+                Instant.parse(barTime),
+                new BigDecimal("100"),
+                new BigDecimal("110"),
+                new BigDecimal("95"),
+                new BigDecimal("105"),
+                world.now());
+        world.haRepository().putBar(ha, Optional.empty());
     }
 
     @Given("the following {string} HA bars are seeded for {string}:")

@@ -1,9 +1,12 @@
 package com.heikinashi.monitoring.infrastructure.email;
 
+import com.heikinashi.monitoring.application.StrategyAlertText;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiConfidence;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.PatternEvent;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Optional;
@@ -278,6 +281,140 @@ final class EmailBodies {
         }
         sb.append(" &middot; enrichment ").append(esc(enrichment.wire())).append("</div>");
 
+        sb.append(rule());
+        sb.append(DISCLAIMER_FOOTER);
+        sb.append("</td></tr></table></td></tr></table></body></html>");
+        return sb.toString();
+    }
+
+    // --- Strategy alert bodies (CLAUDE.md §9 Component 1c) -------------------
+
+    static String subject(String prefix, StrategyAlert alert) {
+        // [HA Alert] AAPL.NASDAQ — strategy rsi-reversal-long on 1d (2026-05-07)
+        return prefix
+                + " " + alert.ticker() + "." + alert.exchange()
+                + " — strategy " + alert.strategyName()
+                + " on " + alert.timeframe().wire()
+                + " (" + alert.barTime().toString().substring(0, 10) + ")";
+    }
+
+    static String plainText(StrategyAlert alert, Optional<AiAnalysis> analysis) {
+        StringBuilder sb = new StringBuilder();
+        // The matched scenarios / roles / verbatim memo are the strategy note.
+        sb.append(StrategyAlertText.render(alert)).append('\n');
+        analysis.ifPresent(a -> {
+            sb.append("AI fundamental analysis (confidence: ")
+                    .append(a.confidence().wire())
+                    .append("):\n");
+            a.corroborating()
+                    .ifPresent(c -> sb.append("  Corroborating: ").append(c).append('\n'));
+            a.contradicting()
+                    .ifPresent(c -> sb.append("  Contradicting: ").append(c).append('\n'));
+            sb.append('\n');
+        });
+        return sb.toString();
+    }
+
+    static String html(StrategyAlert alert, Optional<String> chartCid, Optional<AiAnalysis> analysis) {
+        String ticker = esc(alert.ticker()) + "." + esc(alert.exchange());
+        String tf = esc(alert.timeframe().wire());
+        String detDate = alert.detectedAt().toString().substring(0, 10);
+        String detTime = alert.detectedAt().toString().substring(11, 16);
+
+        StringBuilder sb = new StringBuilder(4096);
+        sb.append("<html><head>")
+                .append("<meta name=\"color-scheme\" content=\"light\">")
+                .append("<meta name=\"supported-color-schemes\" content=\"light\">")
+                .append("<style>:root{color-scheme:light only;supported-color-schemes:light;}</style>")
+                .append("</head><body style=\"margin:0;padding:24px 0;background:")
+                .append(CREAM)
+                .append(";\">");
+        sb.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:")
+                .append(CREAM)
+                .append(";\"><tr><td align=\"center\">");
+        sb.append("<table role=\"presentation\" width=\"640\" cellpadding=\"0\" cellspacing=\"0\" "
+                + "style=\"max-width:640px;background:#FFFFFF;\"><tr><td style=\"padding:40px 44px 36px;\">");
+
+        // Header.
+        sb.append("<table role=\"presentation\" width=\"100%\"><tr><td style=\"")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">biscella.signals</td><td align=\"right\" style=\"")
+                .append(MONO)
+                .append("font-size:11px;color:")
+                .append(MUTED)
+                .append(";\">")
+                .append(detDate)
+                .append(" &middot; ")
+                .append(detTime)
+                .append(" UTC</td></tr></table>");
+        sb.append(rule());
+
+        // Summary.
+        sb.append("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\">")
+                .append(kvRow("INSTRUMENT", ticker))
+                .append(kvRow("STRATEGY", esc(alert.strategyName())))
+                .append(kvRow("TIMEFRAME", timeframeWord(alert.timeframe())))
+                .append("</table>");
+        sb.append(rule());
+
+        // Heading.
+        sb.append("<div style=\"")
+                .append(SANS)
+                .append("font-size:26px;font-weight:700;letter-spacing:-0.4px;line-height:30px;color:")
+                .append(INK)
+                .append(";padding:14px 0 6px;\">Strategy alert.</div>");
+        sb.append("<div style=\"")
+                .append(SANS)
+                .append("font-size:14px;line-height:21px;color:")
+                .append(MUTED)
+                .append(";padding-bottom:20px;\">")
+                .append(esc(alert.strategyName()))
+                .append(" matched ")
+                .append(alert.lines().size())
+                .append(" scenario(s) on the ")
+                .append(tf)
+                .append(" chart.</div>");
+
+        // Chart.
+        if (chartCid.isPresent()) {
+            sb.append("<img src=\"cid:")
+                    .append(esc(chartCid.get()))
+                    .append("\" alt=\"Strategy chart\" width=\"552\" style=\"display:block;width:100%;\">");
+        }
+
+        // Matched scenarios — role + verbatim memo (Block 16).
+        sb.append(sectionLabel("// matched scenarios"));
+        for (StrategyAlertLine line : alert.lines()) {
+            sb.append(para(line.scenarioName() + " [" + line.role() + "]"));
+            line.stopLoss().ifPresent(s -> sb.append(para("stop_loss: " + s + " (set this at your broker)")));
+            line.takeProfit().ifPresent(s -> sb.append(para("take_profit: " + s + " (set this at your broker)")));
+            line.positionPrecondition().ifPresent(s -> sb.append(para("applies only if: " + s + " (context)")));
+        }
+
+        // Fundamental analysis.
+        sb.append(rule());
+        if (analysis.isPresent()) {
+            AiAnalysis a = analysis.get();
+            sb.append(sectionLabel("// corroborating"));
+            sb.append(para(a.corroborating().orElse("None available.")));
+            sb.append(sectionLabel("// contradicting"));
+            sb.append(para(a.contradicting().orElse("None available.")));
+        } else {
+            sb.append(sectionLabel("// fundamental analysis"));
+            sb.append(para("AI fundamental analysis unavailable for this alert."));
+        }
+
+        // Footer.
+        sb.append(rule());
+        sb.append("<div style=\"")
+                .append(MONO)
+                .append("font-size:10px;line-height:1.8;color:")
+                .append(FAINT)
+                .append(";\">id &middot; ")
+                .append(esc(alert.instrumentId()))
+                .append("</div>");
         sb.append(rule());
         sb.append(DISCLAIMER_FOOTER);
         sb.append("</td></tr></table></td></tr></table></body></html>");

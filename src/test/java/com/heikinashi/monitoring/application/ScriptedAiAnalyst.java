@@ -28,6 +28,15 @@ public final class ScriptedAiAnalyst implements AiAnalyst {
 
     @Override
     public AiAnalysis analyze(PatternEvent event) {
+        return nextAnalysis();
+    }
+
+    @Override
+    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+        return nextAnalysis();
+    }
+
+    private AiAnalysis nextAnalysis() {
         callCount++;
         RuntimeException next = scriptedFailures.pollFirst();
         if (next != null) {

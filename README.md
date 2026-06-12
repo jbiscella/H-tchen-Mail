@@ -55,6 +55,21 @@ weekly), and highlights the exact candle that triggered it — then the AI note
 weighs recent news for and against the signal so you have context before you
 decide whether to act.
 
+### Beyond the three patterns: custom strategies
+
+An instrument can also be watched by a **custom strategy** instead of the three
+built-in patterns. A strategy is a set of named rules — combining indicators
+(RSI, MACD, moving averages, pivots, HA candle shapes, …) into explicit
+entry/exit conditions — supplied to the service as an imported JSON file in
+H-tchen's own strategy format and attached to the instrument.
+
+When a strategy is attached it **takes over**: the three fixed patterns are
+suppressed for that instrument, and only the strategy's rules can raise an
+alert. The email then names the rule that fired, and the chart draws *only* the
+indicators that rule references — the RSI sub-pane if it uses RSI, the moving
+averages it compares, and so on — so the picture explains the exact rule that
+triggered, nothing more.
+
 ## How it works
 
 Once a day an EventBridge cron fires the `monitoring-main` Lambda, which for
@@ -64,15 +79,21 @@ each active instrument runs four stages:
    idempotently to DynamoDB, apply the per-instrument storage policy.
 2. **Heikin Ashi** — compute HA candles from the OHLC chain, deterministically
    and idempotently (`BigDecimal` arithmetic end-to-end).
-3. **Detect** — evaluate three patterns (color change, strong candle, doji)
+3. **Detect** — evaluate the three patterns (color change, strong candle, doji)
    on the freshly computed bars. Only the most recent bar can raise an alert,
-   so a 250-bar first ingest doesn't trigger an alert storm.
+   so a 250-bar first ingest doesn't trigger an alert storm. If the instrument
+   has a custom strategy attached, its rules are evaluated instead and the three
+   fixed patterns are suppressed — an instrument is watched *either* by the
+   built-in patterns *or* by its strategy, never both.
 4. **Dispatch** — for each detected event render a JFreeChart HA chart, ask
    Claude on AWS Bedrock for a fundamental-analysis note (the model pulls
    headlines from Marketaux + Yahoo Finance RSS through a tool-use loop),
    compose a multipart email and send it via SES. Failed enrichment is queued
    in DynamoDB and retried by a second Lambda every 15 minutes, degrading to a
-   plain alert after three attempts.
+   plain alert after three attempts. Strategy alerts run the same chart → AI →
+   email path through a dedicated dispatch, and have their own retry queue that
+   the same Lambda drains; a strategy retry **re-renders** the chart from the
+   stored strategy and bars rather than stashing the image.
 
 You can also invoke `monitoring-main` manually — scoped to specific instrument
 ids, or with `force_email` to smoke-test the whole chart + AI + email path

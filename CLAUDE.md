@@ -98,7 +98,7 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 | `entity`    | String | discriminator                                          |
 | `gsi1Pk`    | String | GSI1 partition key (sparse, only on `INSTRUMENT`)      |
 | `gsi1Sk`    | String | GSI1 sort key                                          |
-| `gsi2Pk`    | String | GSI2 partition key (sparse, only on `PENDING_ALERT` due) |
+| `gsi2Pk`    | String | GSI2 partition key (sparse, on a due `PENDING_ALERT` (`RETRY_DUE`) or `STRATEGY_PENDING_ALERT` (`RETRY_DUE_STRATEGY`)) |
 | `gsi2Sk`    | String | GSI2 sort key (`retry_at` ISO 8601)                    |
 | `ttl`       | Number | UNIX epoch seconds; native DynamoDB TTL on this attribute |
 | ...         | ...    | entity-specific attributes                             |
@@ -111,7 +111,7 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 |------------------------|--------------------------------------------------------|------------|-----------------------------------|
 | Primary                | `pk` / `sk`                                            | n/a        | n/a                               |
 | GSI1 `gsi_status`      | `gsi1Pk` (`STATUS#<active\|archived>`) / `gsi1Sk` (`INSTRUMENT#<id>`) | ALL  | only items with `entity=INSTRUMENT` |
-| GSI2 `gsi_retry_due`   | `gsi2Pk` (`RETRY_DUE`) / `gsi2Sk` (`<retry_at_iso>`)   | ALL        | only items with `entity=PENDING_ALERT` |
+| GSI2 `gsi_retry_due`   | `gsi2Pk` (`RETRY_DUE` \| `RETRY_DUE_STRATEGY`) / `gsi2Sk` (`<retry_at_iso>`)   | ALL        | items with `entity=PENDING_ALERT` (`RETRY_DUE`) or `entity=STRATEGY_PENDING_ALERT` (`RETRY_DUE_STRATEGY`) |
 
 ### Item type catalog
 
@@ -121,12 +121,14 @@ Single-table design. All entities live here, distinguished by `entity` attribute
 | CONFIG         | `INSTRUMENT#<id>`                  | `CONFIG`                                                      | never                                |
 | OHLC           | `INSTRUMENT#<id>`                  | `OHLC#<tf>#<bar_time_iso>`                                    | per storage policy                   |
 | HA             | `INSTRUMENT#<id>`                  | `HA#<tf>#<bar_time_iso>`                                      | per storage policy                   |
+| STRATEGY       | `INSTRUMENT#<id>`                  | `STRATEGY`                                                    | never                                |
 | UNIQUE_LOCK    | `TICKER#<exchange>#<ticker>`       | `LOCK`                                                        | never                                |
 | PENDING_ALERT  | `PENDING_ALERT#<event_uid>`        | `META`                                                        | grace (e.g. 30 days after creation)  |
+| STRATEGY_PENDING_ALERT | `STRATEGY_PENDING_ALERT#<event_uid>` | `META`                                            | grace (e.g. 30 days after creation)  |
 | ALERT (audit)  | `INSTRUMENT#<id>`                  | `ALERT#<bar_time_iso>#<pattern>#<subtype>#<sent_at_ms>`       | 365 days                              |
 
 Where `<tf>` is `1d` or `1w`. `<bar_time_iso>` and `<retry_at_iso>` are full ISO 8601 strings (`yyyy-MM-ddTHH:mm:ssZ`).
-`<event_uid>` is `<instrument_id>_<tf>_<bar_time>_<pattern>_<subtype>` (a deterministic concatenation suitable as a composite key).
+`<event_uid>` is `<instrument_id>_<tf>_<bar_time>_<pattern>_<subtype>` for a `PENDING_ALERT`; a `STRATEGY_PENDING_ALERT` instead uses `<instrument_id>_<tf>_<bar_time>_strategy` (no subtype, via `PendingStrategyAlert.uidOf`). Both are deterministic concatenations suitable as a composite key.
 
 ### INSTRUMENT attributes
 
@@ -174,6 +176,32 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 | `strong_candle` | `min_body_ratio`     | decimal | (0, 1]         | minimum body/range ratio                               |
 | `doji`          | `max_body_ratio`     | decimal | (0, 1]         | maximum body/range ratio to qualify as doji            |
 
+### STRATEGY attributes
+
+At most one STRATEGY item per instrument (single `sk = STRATEGY`). Its presence is
+what supersedes the three fixed patterns (Block 15, SI-3b). The item stores the
+imported strategy as the **verbatim H-tchen JSON** (the `StrategyJsonImporter`
+schema, Blocks 15-16); the repository reparses it on read via
+`StrategyJsonImporter.fromJson` — no per-field DynamoDB mapping of scenarios /
+conditions, so the stored shape always matches the importer's authoritative
+schema. The submitted JSON string is stored verbatim in `strategy_json`; reads
+return the normalized domain `Strategy` via `StrategyJsonImporter.fromJson`, not
+the original bytes (there is no raw-JSON read path).
+
+| Attribute       | Type    | Required | Notes                                                              |
+|-----------------|---------|----------|--------------------------------------------------------------------|
+| `strategy_json` | String  | yes      | verbatim imported strategy JSON (importer schema, Blocks 15-16)    |
+| `name`          | String  | yes      | denormalized strategy name (convenience; authoritative copy is inside `strategy_json`) |
+| `created_at`    | String  | yes      | ISO 8601 UTC                                                       |
+| `updated_at`    | String  | yes      | ISO 8601 UTC                                                       |
+
+`findByInstrumentId` does a `GetItem` at `pk=INSTRUMENT#<id>, sk=STRATEGY`,
+returns empty when absent (the instrument keeps legacy detection), and otherwise
+returns `StrategyJsonImporter.fromJson(strategy_json)`. A corrupt stored JSON
+fails loud (`StrategyImportException`) rather than silently degrading to legacy.
+Writing is idempotent last-write-wins (`PutItem`, no condition): re-importing a
+strategy for the same instrument overwrites the single STRATEGY item.
+
 ### OHLC attributes
 
 | Attribute      | Type            | Required | Notes                                              |
@@ -217,6 +245,45 @@ Supported exchanges (config-driven, may grow): `NASDAQ`, `NYSE`, `MIL`, `XETRA`,
 | `gsi2Pk`         | String  | yes      | `RETRY_DUE`                                                         |
 | `gsi2Sk`         | String  | yes      | `<retry_at_iso>`                                                    |
 | `ttl`            | Number  | yes      | `now + 30 days` safety net                                          |
+
+### STRATEGY_PENDING_ALERT attributes
+
+A failed **strategy** dispatch (Component 1c, SI-3c.3) queues here instead of the
+`PENDING_ALERT` partition, because a strategy alert is not a `PatternEvent`. The
+item stores **only the alert + retry bookkeeping — never the chart**: because the
+strategy is itself persisted (the `STRATEGY` item) and OHLC/HA bars are readable
+by count (`findLastN`), the retry poller **re-renders the chart** from the
+persisted `Strategy` + bars rather than carrying a (potentially >400 KB) PNG blob
+in the row. If the strategy was deleted between detection and retry, the missing
+strategy is treated as a render fault: the item is bumped like any chart failure,
+and only on the final attempt (at the retry cap) does the poller send a
+chart-degraded email (SI-3c.3).
+
+The item additionally stores the **triggering raw OHLC bar's snapshot** (four
+decimals — instrument / timeframe / bar_time come from the alert). The strategy
+chart is rendered from the raw `OHLCSeries` (heerwisch draws Heikin-Ashi candle
+bodies via `CandleStyle.HEIKIN_ASHI`, §9 Component 1b), so the snapshot is the
+raw OHLC, not Heikin-Ashi. Under a `SNAPSHOT_ONLY` retention policy a later
+ingest can evict the triggering raw bar before the retry runs (raw OHLC and HA
+share the same TTL), so `OhlcRepository.findLastN` no longer contains `bar_time`;
+since the entry/exit marker must sit on a bar that is in the series (heerwisch
+V7), the poller **synthesizes the triggering bar from this snapshot** when it is
+missing. Without it a retried chart would needlessly degrade to chart-less. The
+snapshot is a handful of numbers, so it does not reintroduce the 400 KB item-size
+risk.
+
+| Attribute       | Type    | Required | Notes                                                                       |
+|-----------------|---------|----------|-----------------------------------------------------------------------------|
+| `event_uid`     | String  | yes      | `<instrument_id>_<tf>_<bar_time>_strategy` (one pending per instrument/tf/bar) |
+| `alert`         | String  | yes      | full StrategyAlert JSON payload (one line per matched scenario)             |
+| `trigger_ohlc_open/high/low/close` | Number | no | triggering raw OHLC bar snapshot, for V7-safe bar synthesis on retry (above) |
+| `retry_count`   | Number  | yes      | 0..3                                                                        |
+| `retry_at`      | String  | yes      | ISO 8601 UTC, next attempt                                                  |
+| `last_error`    | Map      | yes      | `{ code, message, ts, component }`                                          |
+| `created_at`    | String  | yes      | ISO 8601 UTC                                                                |
+| `gsi2Pk`        | String  | yes      | `RETRY_DUE_STRATEGY` (distinct partition so the legacy poller never reads these) |
+| `gsi2Sk`        | String  | yes      | `<retry_at_iso>`                                                            |
+| `ttl`           | Number  | yes      | `created_at + 30 days` safety net                                           |
 
 ### ALERT (audit) attributes
 
@@ -426,8 +493,9 @@ Feature: Instrument Registry — Domain Operations
     Then a multi-step delete runs:
       | step | operation                                                                  |
       | 1    | Query sk begins_with "OHLC#" or "HA#" + paginated BatchWriteItem delete   |
-      | 2    | TransactWrite: DeleteItem META + CONFIG + UNIQUE_LOCK                      |
+      | 2    | TransactWrite: DeleteItem META + CONFIG + STRATEGY + UNIQUE_LOCK           |
     And no trace of the instrument remains
+    And the STRATEGY item (if any) is gone, so findByInstrumentId returns empty
 
   Scenario: Hard delete is idempotent
     Given "abc-123" was already deleted
@@ -1192,7 +1260,7 @@ Feature: Heikin Ashi Pattern Detection
 ```
 ingest → HA → detect → dispatch_alerts(events)
                           │
-                          ├─ render_chart (JFreeChart)         ──┐
+                          ├─ render_chart (heerwisch)          ──┐
                           ├─ run_ai_analyst (Bedrock Converse)  ──┤  best-effort
                           ├─ compose_multipart_email (Commons)  ──┤
                           └─ send via SesV2Client.sendEmail(raw)──┘
@@ -1201,18 +1269,323 @@ ingest → HA → detect → dispatch_alerts(events)
                           after 3 retries → degraded email + delete pending
 ```
 
-### Component 1 — Chart Renderer (JFreeChart)
+### Component 1 — Chart Renderer (heerwisch / ha-track)
+
+Since **Block 14** the chart is rendered by ha-track's **heerwisch** (the
+`heerwisch-api` `ChartSpec`/`ChartRenderer`, drawn by the headless
+`heerwisch-jfreechart` driver), shared with wichtelm-app. The original custom
+JFreeChart renderer is gone; the constraints below now read against heerwisch.
 
 | Aspect                            | Constraint                                                                                |
 |-----------------------------------|-------------------------------------------------------------------------------------------|
-| HA is not native OHLC for the lib | Pass HA values as if they were OHLC: `OHLCSeriesCollection` + `CandlestickRenderer`       |
-| Headless                          | Set `java.awt.headless=true` before any AWT class is loaded (Lambda default but make explicit) |
-| Output                            | PNG bytes via `ChartUtils.writeChartAsPNG(ByteArrayOutputStream, JFreeChart, w, h)`        |
-| Highlight pattern bar             | annotation on the `XYPlot` (e.g., `XYPointerAnnotation`) at `bar_time, ha_close`           |
+| HA candles                        | the HA lookback window → a commons `HASeries` via `CommonsBarAdapter`; heerwisch draws HA candles |
+| Headless                          | the heerwisch-jfreechart driver is headless and deterministic (embedded DejaVu Sans) — no display required |
+| Output                            | PNG bytes from the heerwisch `ChartImage`, mapped unchanged to the domain `ChartImage`     |
+| Highlight pattern bar             | `Annotation.BarHighlight` at `bar_time, ha_close` (the bar must be in the series — V7)     |
 | Volume sub-panel                  | optional, gated by `monitoring.chart.show-volume` (default `false`)                        |
-| Fonts                             | Lambda Java 25 ships with Liberation fonts; verify in test container                       |
 | Resolution                        | width/height from config; default 900×500                                                  |
 | No filesystem                     | All in memory                                                                              |
+
+### Component 1b — Strategy-driven chart overlays (Blocks 15-16 follow-up)
+
+For an instrument monitored by an imported **Strategy** (Blocks 15-16, which
+supersedes the three fixed patterns), the chart must additionally explain the
+*rule* visually.
+
+**As** an alert recipient of a strategy-monitored instrument, **I want** the
+chart to show only the indicators the strategy's scenario conditions reference
+(RSI sub-pane, SMA/EMA overlays, MACD sub-pane, …), **so that** the chart
+explains the rule that fired — only the relevant diagrams, nothing else.
+
+Derivation is **exclusive** and mirrors wichtelm-app's `HtmlReportGenerator`
+(indicator references found by scanning the condition strings for `name(args)`
+calls — `dsl-eval` exposes no referenced-indicator API), mapped to
+`Indicator.*` on **`PriceSource.CLOSE`** (the raw price, NOT Heikin-Ashi):
+
+| condition references                                                            | → heerwisch Indicator                                            | pane    |
+|---------------------------------------------------------------------------------|------------------------------------------------------------------|---------|
+| `rsi(p)` / `rsi_overbought(t)` / `rsi_oversold(t)` / `rsi_crosses_50()`         | `RSI(p, ob, os, CLOSE, DANGER_ZONES_ON)` (Tier-B → period 14, thresholds threaded) | SUBPLOT |
+| `macd_line/signal/histogram(f,s,sig)` / `macd_*_cross()` / `macd_zero_cross_*()`| `MACD(f,s,sig, CLOSE)` (Tier-B → 12/26/9)                         | SUBPLOT |
+| `sma(p)` / `price_*_sma(p)` / `sma_*_ema(sp,ep)`                                 | `SMA(p, CLOSE)` (+ `EMA(ep)` for the MA-vs-MA forms)             | MAIN    |
+| `ema(p)` / `price_*_ema(p)`                                                      | `EMA(p, CLOSE)`                                                   | MAIN    |
+| `atr(p)`                                                                         | `ATR(p)`                                                          | SUBPLOT |
+| `stddev(p)`                                                                      | `StdDev(p, CLOSE)`                                                | SUBPLOT |
+| `highest_high(p)` / `lowest_low(p)`                                              | `RollingMax(p, HIGH)` / `RollingMin(p, LOW)`                      | MAIN    |
+| `highest_close(p)` / `lowest_close(p)`                                           | `RollingMax(p, CLOSE)` / `RollingMin(p, CLOSE)`                   | MAIN    |
+| `ha_*` primitives (doji / strong / reversal)                                     | none (already the HA candles)                                     | —       |
+
+**Heikin-Ashi candles + real-close indicators (ha-track 0.57).** The chart is
+built from the instrument's **raw `OHLCSeries`** with
+`ChartSpecBuilder.withCandleStyle(CandleStyle.HEIKIN_ASHI)`: heerwisch computes
+Heikin-Ashi for the **candle bodies only** (display), while the indicators are
+computed on the raw series — `PriceSource.CLOSE`. This is required for the chart
+to *justify the rule*: the rule engine (`DslConditionEvaluator`) evaluates every
+Tier-A indicator (`rsi`/`sma`/`ema`/`macd`/`stddev`, `highest_*`/`lowest_*`) on
+raw OHLC, never on Heikin-Ashi values. Drawing the overlays on HA close (the
+pre-0.57 behaviour, which fed heerwisch an `HASeries` and was forced to
+`HA_CLOSE` by heerwisch's V5 invariant) made the chart contradict the alert: an
+RSI computed on smoothed HA closes need not cross the threshold the rule named
+on the raw close. `CandleStyle.HEIKIN_ASHI` (added in heerwisch 0.57) decouples
+candle style from indicator price source, so the candles stay Heikin-Ashi while
+the indicators read the real close exactly as the rule evaluated them. The
+window-aggregate channels read raw `HIGH` / `LOW` / `CLOSE` to match
+`highest_high` / `lowest_low` / `highest_close` / `lowest_close`.
+
+Indicators are de-duplicated by `indicator.toString()`; an indicator referenced
+by several scenarios is drawn once.
+
+Increments:
+- **SI-1** — pure derivation `Strategy → List<Indicator>` (`StrategyChartIndicators`). DONE.
+- **SI-2** — build the `ChartSpec` for a `StrategyAlert` from the derived indicators + a role-direction marker on the trigger bar (`StrategyChartSpec`). DONE.
+- **SI-3b** — suppression: an instrument with a strategy no longer emits the legacy fixed-pattern alerts (Block 15). DONE.
+- **SI-3c.1** — render the `StrategyChartSpec` to PNG via a dedicated `StrategyChartRenderer` (domain port) backed by the heerwisch driver.
+- **SI-3c** — dedicated dispatch of a `StrategyAlert`: chart (SI-3c.1) → AI → email → retry/audit, via `StrategyAlert`-aware port overloads (dispatch fork "A", faithful: preserves all matched lines / roles / memo).
+- **SI-3 (orchestration)** — `MonitoringRunService` calls `detectStrategyAlert` for strategy instruments and routes the `StrategyAlert` to the dedicated dispatch.
+- **SI-3a** — strategy persistence: a `STRATEGY` item (§2) + `DynamoDbStrategyRepository` replacing the `NoOp`. The item stores the verbatim importer JSON; `findByInstrumentId` reparses via `StrategyJsonImporter.fromJson`, `save` is an idempotent `PutItem`.
+- **SI-3c.3** — retry for strategy alerts: a `STRATEGY_PENDING_ALERT` item (§2) storing the StrategyAlert JSON (no chart), enqueued on a failed dispatch and recovered by a `StrategyRetryPollerService` that **re-renders** the chart from the persisted `Strategy` + bars, re-runs AI, re-sends, audits, and degrades after the cap. See Component 1c "Retry for strategy alerts".
+
+**Trigger marker (display-only).** The matched bar carries a direction marker
+derived from each matched line's `role`, following wichtelm's capital-flow
+matrix. This is a *display* mapping only — the role stays verbatim in the email
+text (Block 16) and is never used for a trade decision. An unrecognized role
+falls back to a neutral `Annotation.BarHighlight` at `bar_time, close` (raw
+close; the chart is built from the raw `OHLCSeries`, with Heikin-Ashi candle
+bodies drawn by `CandleStyle.HEIKIN_ASHI` — §9 Component 1b).
+
+| role          | `MarkerDirection` | `GlyphStyle`    |
+|---------------|-------------------|-----------------|
+| `long_entry`  | `LONG_ENTRY`      | `UP_TRIANGLE`   |
+| `short_entry` | `SHORT_ENTRY`     | `DOWN_TRIANGLE` |
+| `long_exit`   | `LONG_EXIT`       | `DOWN_TRIANGLE` |
+| `short_exit`  | `SHORT_EXIT`      | `UP_TRIANGLE`   |
+| (other)       | — neutral `BarHighlight` | —        |
+
+Indicators are placed by each indicator's `defaultPane()` (MAIN overlays in
+place; oscillators cycle the subplot slots), de-duplicated, and any whose period
+exceeds the window are skipped — the same placement loop the legacy
+`HeerwischChartRenderer` already uses.
+
+#### Domain operations (Gherkin)
+
+```gherkin
+Feature: Strategy-driven chart overlays
+
+  Scenario: Only the referenced oscillator is derived; HA primitives add nothing
+    Given a strategy whose single scenario references "rsi(14) crosses below 30" and "ha_bullish_reversal(3)"
+    When the chart indicators are derived
+    Then the derived indicators are exactly RSI(14) in a sub-pane
+
+  Scenario: An indicator referenced by several scenarios is derived once
+    Given a strategy with two scenarios referencing macd_bullish_cross() and macd_bearish_cross()
+    When the chart indicators are derived
+    Then the derived indicators are exactly MACD(12,26,9)
+
+  Scenario: Moving averages become main-pane overlays
+    Given a strategy referencing sma(50) and ema(200)
+    When the chart indicators are derived
+    Then the derived indicators are exactly SMA(50) and EMA(200), both in the MAIN pane
+
+  Scenario: A pure Heikin-Ashi strategy adds no overlays
+    Given a strategy referencing only ha_doji() and ha_strong_bullish()
+    When the chart indicators are derived
+    Then no chart indicators are derived
+
+  # SI-2 — the chart spec built for a strategy alert
+
+  Scenario: The strategy chart spec carries the derived overlays in their panes
+    Given a strategy referencing rsi(14) and sma(50)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec places RSI(14) in a sub-pane and SMA(50) in the MAIN pane
+
+  Scenario: A long_entry line places an up-triangle entry marker on the trigger bar
+    Given a strategy referencing rsi(14)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has an entry marker on the trigger bar with direction "LONG_ENTRY" and glyph "UP_TRIANGLE"
+
+  Scenario: A long_exit line places a down-triangle exit marker on the trigger bar
+    Given a strategy referencing macd_bearish_cross()
+    And a strategy alert with a "long_exit" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has an entry marker on the trigger bar with direction "LONG_EXIT" and glyph "DOWN_TRIANGLE"
+
+  Scenario: An unrecognized role falls back to a neutral bar highlight
+    Given a strategy referencing rsi(14)
+    And a strategy alert with a "watch" line on the latest bar
+    When the strategy chart spec is built
+    Then the spec has a neutral bar highlight on the trigger bar and no entry marker
+
+  # SI-3c.1 — render the spec to PNG via the heerwisch driver
+
+  Scenario: The strategy alert chart renders to a PNG the email can embed
+    Given a strategy referencing rsi(14) and sma(50)
+    And a strategy alert with a "long_entry" line on the latest bar
+    When the strategy alert chart is rendered
+    Then a PNG chart image of 900x500 is produced
+
+  # SI-3a — strategy persistence: the STRATEGY item round-trips through the repository
+
+  Scenario: A saved strategy is read back by instrument id
+    Given an imported strategy JSON saved for instrument "abc-123"
+    When the strategy repository is queried for instrument "abc-123"
+    Then the strategy is returned with every scenario, role and condition intact
+
+  Scenario: An instrument with no STRATEGY item keeps legacy detection
+    When the strategy repository is queried for an instrument with no saved strategy
+    Then no strategy is returned
+
+  Scenario: Re-saving a strategy for the same instrument overwrites the single item
+    Given an imported strategy JSON saved for instrument "abc-123"
+    And a different strategy JSON saved for instrument "abc-123"
+    When the strategy repository is queried for instrument "abc-123"
+    Then the strategy returned is the most recently saved one
+```
+
+### Component 1c — Strategy alert dispatch (SI-3c)
+
+A `StrategyAlert` is dispatched by a dedicated `StrategyAlertDispatchService`
+that mirrors the legacy `AlertDispatchService` but is `StrategyAlert`-aware (the
+faithful "path A"): render chart (SI-3c.1) → AI → email, preserving every matched
+line / role / memo. The AI and email ports gain `StrategyAlert` overloads
+(`AiAnalyst.analyze(StrategyAlert)`, `EmailSender.sendFull(StrategyAlert, …)`);
+the email bodies show one line per matched scenario with the role and the
+verbatim stop/take/precondition memo (Block 16), never collapsed to a single
+pattern.
+
+SI-3c.2 covers the first-attempt happy path + the no-recipients skip.
+
+```gherkin
+Feature: Strategy alert dispatch (first attempt)
+
+  Scenario: A strategy alert is dispatched with chart, AI and email
+    Given an instrument with one recipient monitored by a strategy
+    And a strategy alert matched on the latest bar
+    When the strategy alert is dispatched
+    Then the strategy chart is rendered
+    And the AI analyst runs for the strategy alert
+    And a full email is sent to the recipient
+    And the dispatch counts {sent:1}
+
+  Scenario: A strategy alert with no recipients is skipped
+    Given an instrument with no recipients monitored by a strategy
+    And a strategy alert matched on the latest bar
+    When the strategy alert is dispatched
+    Then no email is sent
+    And the dispatch counts {skipped:1}
+```
+
+#### Retry for strategy alerts (SI-3c.3)
+
+A failed strategy dispatch is **retried**, mirroring the legacy `PENDING_ALERT`
+mechanics (§9 "Retry queue mechanics"). Because the strategy is persisted (the
+`STRATEGY` item, SI-3a) and bars are readable by count (`findLastN`), the queued
+`STRATEGY_PENDING_ALERT` item (§2) stores **only the alert** — never the chart.
+The poller **re-renders** the chart from the persisted `Strategy` + bars (falling
+back to chart-degraded if the strategy was deleted), re-runs the AI analyst from
+the stored alert, and re-sends. This keeps the row small and removes the
+DynamoDB 400 KB item-size risk of inlining a PNG.
+
+| Behavior                                       | Rule                                                                              |
+|------------------------------------------------|-----------------------------------------------------------------------------------|
+| First transient failure (chart / AI / email)   | write `STRATEGY_PENDING_ALERT` with `retry_count=0`, `retry_at=now+1h`, `last_error.code` (no chart stored) |
+| Poller picks up due items                       | Query GSI2 with `gsi2Pk=RETRY_DUE_STRATEGY` and `gsi2Sk <= now`                   |
+| Poller, per item                                | reload `Strategy` + bars and **re-render** the chart (chart-degraded if the strategy is gone or render still fails); re-run `AiAnalyst.analyze(alert)`; send |
+| On success                                      | record the audit `ALERT` item; DeleteItem `STRATEGY_PENDING_ALERT`               |
+| On failure with `retry_count + 1 < 3`           | UpdateItem: `retry_count++`, `retry_at = now + 1h`, `last_error` updated          |
+| On failure with `retry_count + 1 == 3`          | Send **degraded** email (chart-degraded if render still fails; AI section empty if AI still fails); DeleteItem |
+| All recipients rejected on the **final** attempt | DeleteItem and give up — an invalid recipient list is permanent, so the poison item is dropped (logged) rather than bumped forever. SES being *down* (a `DependencyUnavailableException`) is transient and still bumps. |
+| No recipients at poll time                       | DeleteItem and skip                                                              |
+| Idempotency / races                             | enqueue `attribute_not_exists(pk)`; bump conditional on `retry_count` — same as legacy |
+
+**Chart window.** Both the first-attempt dispatch and the retry re-render read
+the chart's HA bars by the **same lookback as strategy evaluation**
+(`STRATEGY_LOOKBACK_BARS`), so any indicator a scenario references (and that was
+warm enough to fire the alert) has enough bars to render — otherwise
+`StrategyChartSpec.placeIndicators` would silently drop the very overlay that
+triggered the alert.
+
+**Render-fault wrapping.** `HeerwischStrategyChartRenderer` wraps **any** runtime
+failure (heerwisch/JFreeChart `RuntimeException`, not only the driver's checked
+`ChartRenderException`) as the domain `ChartRenderException`, so a render fault is
+caught by the chart-stage handler and enqueued/degraded rather than failing the
+whole instrument run — same contract as the legacy `HeerwischChartRenderer`.
+
+**SES-fault wrapping.** `SesEmailSender.sendRaw` classifies a send fault by type.
+A non-`SesV2Exception` AWS-SDK `SdkException` (client-side timeout / network /
+credentials) is treated as a transient `DependencyUnavailableException`, so it is
+caught by dispatch / poller and enqueued / bumped instead of escaping. A
+`SesV2Exception` is split by error code via `classify`: transient throttling / 5xx
+→ `DependencyUnavailableException` (retried); config / account errors
+(`AccessDeniedException`, `SendingPausedException`, anything `NotAuthorized`) →
+`SESConfigurationException` (surfaced, not retried); recipient-level rejects
+(`MessageRejected`, `MailFromDomainNotVerified`, address-format) → a failed
+`DeliveryResult` with no exception, handled as an ordinary non-delivery.
+
+**Audit.** A successful strategy send (first attempt *and* retry) records an
+`ALERT` audit item (§2) via `AlertAuditRepository.recordSentStrategyAlert`, reusing
+the legacy `ALERT` shape with `pattern = "strategy"`, `subtype = <strategy name>`,
+the delivered recipients, SES message-IDs, and enrichment — so strategy sends
+appear in the same compliance history as legacy alerts. On the **retry** path the
+audit write is **best-effort and happens AFTER the pending item is deleted**: the
+email is already delivered, so a transient audit-write failure must not leave the
+pending item to be retried and re-send a duplicate. A failed audit write is logged
+and swallowed, never resurfacing the alert.
+
+**Retry failure attribution.** When a retry bumps the pending item, `last_error`
+names the dependency that actually failed: a chart re-render failure →
+`component = chart`, an AI failure → `ai`, and a **mail-send failure (SES
+unavailable, or all recipients rejected) → `email`** — so retry-backlog
+diagnostics and alarms point at the right dependency rather than mislabeling a
+mail outage as an AI failure.
+
+**Handler isolation.** The `retry-poller` Lambda (§10) runs **both** queues each
+tick, each in its own guarded block: a runtime failure draining the legacy
+`PENDING_ALERT` batch does not abort the run before the `STRATEGY_PENDING_ALERT`
+batch (and vice-versa).
+
+```gherkin
+Feature: Strategy alert retry
+
+  Scenario: A transient AI failure on first attempt enqueues a strategy pending alert
+    Given an instrument with one recipient monitored by a strategy
+    And a strategy alert matched on the latest bar
+    And the AI analyst fails on the next 1 attempt
+    When the strategy alert is dispatched
+    Then no strategy email is sent
+    And a strategy pending alert is enqueued with retry_count 0
+    And the strategy dispatch counts queued 1
+
+  Scenario: The poller re-renders the chart and re-sends
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    When the strategy retry poller runs
+    Then the strategy chart is re-rendered from the persisted strategy
+    And a full strategy email is sent
+    And the strategy pending alert is deleted
+
+  Scenario: A missing strategy at retry degrades to a chart-less email after the cap
+    Given no strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 2 due now
+    When the strategy retry poller runs
+    Then a degraded strategy email is sent without a chart
+    And the strategy pending alert is deleted
+
+  Scenario: A transient failure under the cap bumps the retry count
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 0 due now
+    And the AI analyst fails on the next 1 attempt
+    When the strategy retry poller runs
+    Then no strategy email is sent
+    And the strategy pending alert retry_count is 1
+
+  Scenario: All recipients rejected on the final attempt drops the poison item
+    Given a strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 2 due now
+    And the email sender will reject recipient "alice@example.com"
+    When the strategy retry poller runs
+    Then the strategy pending alert is deleted
+```
 
 ### Component 2 — AI Analyst (Bedrock Converse + tool-use loop)
 
@@ -1550,7 +1923,7 @@ retry_poller_handler(input):
 | Function             | Trigger                                  | Memory | Timeout | Concurrency | Purpose                                |
 |----------------------|------------------------------------------|--------|---------|-------------|----------------------------------------|
 | `monitoring-main`    | EventBridge cron `0 22 * * ? *` (daily)  | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
-| `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` items       |
+| `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` then `STRATEGY_PENDING_ALERT` items (SI-3c.3) |
 
 Both:
 - runtime `java25` managed
@@ -1570,7 +1943,7 @@ Both:
                                   └── alerts dispatched (full or queued)
 
 22:15, 22:30, ... ─► retry-poller (every 15 min)
-                     └── recovers due PENDING_ALERTs, retry or degrade
+                     └── recovers due PENDING_ALERT and STRATEGY_PENDING_ALERT items, retry or degrade
 
 Sat-Sun: monitoring-main runs but is essentially a no-op (no new closed bars).
 retry-poller runs unchanged.
@@ -1621,16 +1994,43 @@ Feature: Scheduling and Orchestration
     catch-up run after a Lambda outage loses patterns on intermediate bars;
     acceptable today, can be relaxed via a MainInput flag later.
 
-  Scenario: Manual end-to-end pipeline smoke via force_email
+  Scenario: Manual end-to-end pipeline smoke via force_email (pattern instrument)
     Given an operator invokes monitoring-main with {force_email:true}
+    And the instrument is NOT monitored by a strategy
     And no real pattern fires for a tracked (instrument, timeframe)
     Then a synthetic PatternEvent(pattern=FORCED, subtype=FORCED) is built
       from the latest persisted HA + OHLC bar for that (instrument, timeframe)
-    And chart + AI + email run end-to-end against that event
+    And chart + AI + email run end-to-end against that event via the legacy dispatch
     And when no HA bar exists yet, the synthesis is silently skipped with a WARN log
     Note: FORCED is a synthetic pattern kind, never produced by the detector
     and never settable via instrument config; it exists only to exercise the
     dispatch pipeline manually.
+
+  Scenario: Manual end-to-end pipeline smoke via force_email (strategy instrument)
+    Given an operator invokes monitoring-main with {force_email:true}
+    And the instrument IS monitored by a strategy
+    And the strategy does not fire on the latest bar this run
+    Then a synthetic forced StrategyAlert is built from the latest persisted bar,
+      carrying a single honest "forced" line (scenarioName="forced", role="forced",
+      with no stop-loss / take-profit / position-precondition memo) — never a fake
+      scenario match
+    And it is routed through the strategy dispatch path
+      (StrategyAlertDispatchService → strategy chart + AI + strategy email, with the
+      strategy retry queue on transient failure), NEVER the legacy PatternEvent path
+    And the strategy chart marks the bar with a neutral highlight labelled "forced"
+      (the role-derived marker falls through to a bar highlight — no entry/exit glyph,
+      because nothing actually fired)
+    And when no persisted OHLC bar backs the trigger time, the synthesis is silently
+      skipped with a WARN log (the chart marker sits on that bar, so without it the
+      chart cannot render — mirroring the pattern path's OHLC guard)
+    Note: a strategy instrument's manual smoke stays faithful to what a real strategy
+    alert email looks like (strategy chart with scenario-derived overlays + strategy
+    email body), instead of degrading to a generic pattern chart on the legacy path.
+    The "forced" role is honest — it never asserts that a scenario matched, mirroring
+    how FORCED is a synthetic pattern kind on the pattern path. The "no real event this
+    run" guard already covers a genuine strategy alert (that path sets the per-timeframe
+    real-event flag), so a forced strategy alert is only ever synthesised when the
+    strategy stayed silent.
 
   Scenario: No active instruments → fast exit
     Given no instruments have status="active"
@@ -1794,6 +2194,7 @@ CLI uses AWS SDK v2 directly against DynamoDB / Lambda. No HTTP API.
 | Tool                | Terraform                                           |
 | Environments        | single (`prod`)                                     |
 | Apply               | GitHub Actions on push to `main` (OIDC)             |
+| Deploy gate         | `mvn verify`, `terraform validate`, **and the Trivy `security-scan`** (a fixable HIGH/CRITICAL dependency vuln blocks the deploy chain via `aws-preflight-pre`'s `needs`) |
 | State backend       | S3 (versioning + encryption) + DynamoDB lock        |
 | Region (compute)    | `eu-central-1`                                      |
 | Region (SES)        | `eu-central-1`                                      |
@@ -2326,6 +2727,14 @@ Feature: Monitor an imported strategy, stateless
     When evaluation runs
     Then nachtkrapp's InsufficientDataException is handled
     And no alert is produced for that scenario
+
+  # SI-3 orchestration — the run routes a strategy alert to the dedicated dispatch
+  Scenario: A strategy instrument dispatches a strategy alert in a run
+    Given an instrument monitored by a strategy whose scenario matches on the latest bar
+    When monitoring-main runs
+    Then the strategy alert is dispatched via the dedicated strategy dispatch (chart + AI + email)
+    And no legacy fixed-pattern alert is produced for it
+    And the run counts it among alerts sent
 ```
 
 **Operational invariants**
@@ -2372,38 +2781,24 @@ Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), 
 Single place collecting everything intentionally postponed. Each entry: what it
 is, why it's deferred, and when/how to address it.
 
-1. **Strategy dispatch path is dormant.**
-   *What*: `detectStrategyAlert` is wired for *evaluation* (it imports a strategy,
-   runs dsl-eval over the OHLC series, and produces a `StrategyAlert`), but nothing
-   dispatches strategy alerts to email, and `StrategyRepository` is the `NoOp`
-   implementation, so no instrument can actually hold a strategy. The whole strategy
-   path is therefore unreachable in production today.
-   *Why deferred*: the strategy JSON format isn't proven against real data yet, and
-   the "one email, N lines" dispatch wiring was scoped out.
-   *Safety taken*: the Block 15 "a strategy supersedes the fixed patterns on strategy
-   presence" coupling has been **neutralized** — `detectPatterns` no longer returns
-   empty when a strategy exists — so flipping the repo from `NoOp` to a real one later
-   cannot silently mute an instrument (legacy suppressed + strategy alerts never sent).
-   *To address*: wire `detectStrategyAlert` into the dispatch/email path (subject +
-   `StrategyAlertText` body via the existing `EmailSender`) and restore the supersede
-   semantics, once the JSON format is proven and a real `StrategyRepository` exists.
+1. **Strategy dispatch path** — RESOLVED (PR #80, SI-1..SI-3c.3).
+   `detectStrategyAlert` is now wired into `MonitoringRunService` → the dedicated
+   `StrategyAlertDispatchService` (chart → AI → email, retry via SI-3c.3), the
+   `NoOp` repository is replaced by `DynamoDbStrategyRepository` (a real `STRATEGY`
+   item), and the Block 15 supersede semantics are restored (SI-3b: `detectPatterns`
+   returns empty when a strategy exists, so an instrument is never both suppressed
+   AND undispatched).
 
-2. **Strategy lookback uses calendar seconds, not bar count** (PR #79 review #5).
-   *What*: `PatternDetectionService.detectStrategyAlert` sizes its OHLC read by
-   subtracting `STRATEGY_LOOKBACK_BARS × period_seconds(tf)` (wall-clock seconds)
-   rather than requesting a bar count.
-   *Why deferred*: inert while the dispatch path is dormant (item 1) — the path is
-   unreachable, so the window never actually drives an alert; and it must be tested
-   against real bars, which aren't available without the live path.
-   *Why it's a bug when live*: market gaps (weekends, holidays, missing data) make a
-   calendar window yield **fewer bars than required**, so an indicator computes on a
-   short window and diverges from the backtest — a silent parity break.
-   *To fix at wiring time*: the lookback must request a **bar count** equal to the
-   MAX warmup required across all conditions of all scenarios (e.g. `sma(200)` needs
-   200, `rsi(14)` needs 14 → use 200). This is the runtime twin of the import-time
-   `IndicatorWarmupException` check that already exists. Verified reference: wichtelm
-   windows by bar count (`barsStrictlyBefore` / warmup-by-bars), so bar-count is the
-   parity-correct approach. The code carries a `TODO(PR #79 review #5)` at the spot.
+2. **Strategy lookback by bar count, not calendar seconds** — RESOLVED (PR #79
+   review #5 / PR #80 review).
+   `PatternDetectionService.detectStrategyAlert` reads the last `STRATEGY_LOOKBACK_BARS`
+   persisted OHLC bars **by count** (`OhlcRepository.findLastN(instrumentId, tf,
+   latest, n)`, inclusive of the latest bar), not a `period_seconds(tf)` calendar
+   window. Bar-count is the parity-correct approach (the runtime twin of the
+   import-time `IndicatorWarmupException` check): market gaps (weekends, holidays,
+   missing data) no longer shrink the warmup window, so a long indicator such as
+   `rsi(250)` keeps alerting as long as enough bars are persisted. Verified reference:
+   wichtelm windows by bar count (`barsStrictlyBefore` / warmup-by-bars).
 
 3. **Stateless-parametric evaluation via a future mail "commit" button.**
    *What*: a user-supplied entry price would let `entry_price`-relative conditions
@@ -2423,10 +2818,28 @@ is, why it's deferred, and when/how to address it.
    *To address*: add a `version` attribute and a `ConditionExpression` on the
    `UpdateItem` if/when a multi-writer UI makes concurrent edits likely.
 
+5. **Purge pending retries when a strategy is changed/removed.** A queued
+   `STRATEGY_PENDING_ALERT` belongs to the strategy that fired it; if the strategy
+   is re-imported, edited, or deleted before the retry runs, the in-flight retry is
+   stale. The desired behaviour is to drop the instrument's pending retries on that
+   change. *Why deferred*: (a) there is **no in-app strategy change/remove
+   operation** to hook today — strategies are loaded out-of-band and
+   `StrategyRepository` is read-only (the `mon` management CLI is planned, not
+   built), the only removal being full instrument hard-delete; (b) pending retries
+   are **not indexed by instrument** (pk = `STRATEGY_PENDING_ALERT#<event_uid>`, the
+   only GSI is by `retry_at`), so finding an instrument's retries needs a scan or a
+   new index; (c) it is **self-limiting** — a pending retry lives only ~3 attempts
+   (~hours) before it expires, so the worst case is one slightly-stale email. A
+   snapshot-the-firing-strategy fix was built and **reverted** as over-engineered
+   for a rare, self-correcting case. *To address*: add
+   `PendingStrategyAlertRepository.deleteByInstrumentId` (with an instrument-keyed
+   access path) and call it from the strategy import/delete flow **when that
+   command is built** — it is the natural owner of this cleanup, and also lets
+   instrument hard-delete drop orphaned pending retries.
+
 ### From code (TODO/FIXME)
 
-- `src/main/java/com/heikinashi/monitoring/application/PatternDetectionService.java:214`
-  — `TODO(PR #79 review #5)` on the calendar-seconds lookback (item 2 above).
+- (none currently)
 
 ---
 
@@ -2511,8 +2924,8 @@ Namespace: `Monitoring/HeikinAshi`.
 | `HABarsComputed`             | `Timeframe`               | Count    |                                 |
 | `PatternsDetected`           | `Pattern`, `Subtype`      | Count    | per emitted event               |
 | `AlertsSent`                 | `Mode=full \| degraded`   | Count    | dispatch success                 |
-| `AlertsQueuedForRetry`       | —                         | Count    | enqueue `PENDING_ALERT`         |
-| `RetryItemsProcessed`        | —                         | Count    | end of `retry-poller`           |
+| `AlertsQueuedForRetry`       | `Queue=pattern \| strategy` | Count  | enqueue a `PENDING_ALERT` or `STRATEGY_PENDING_ALERT` |
+| `RetryItemsProcessed`        | `Queue=pattern \| strategy` | Count  | end of `retry-poller` (per queue drained) |
 | `BedrockToolIterations`      | —                         | Average  | per AI call                     |
 | `LambdaDurationSeconds`      | `Function`                | Seconds  | end of handler                  |
 
@@ -2522,7 +2935,7 @@ Namespace: `Monitoring/HeikinAshi`.
 |------------------------------------|-------------------------------------------|----------|
 | `MainNotRunning`                   | no invocation of `monitoring-main` in 26h | high     |
 | `MainFailureRate`                  | `InstrumentsFailed / InstrumentsProcessed > 30%` | medium |
-| `RetryBacklog`                     | `PENDING_ALERT` items > 50                | medium   |
+| `RetryBacklog`                     | `PENDING_ALERT` or `STRATEGY_PENDING_ALERT` items > 50 | medium   |
 | `BedrockHighErrorRate`             | `LLMException` > 10/h                     | medium   |
 | `LambdaErrors`                     | Lambda errors > 0                         | high     |
 | `DLQDepth`                         | DLQ messages > 0                          | high     |

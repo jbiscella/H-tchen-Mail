@@ -51,6 +51,17 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
     }
 
     @Override
+    public List<OHLCBar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n) {
+        TreeMap<Instant, OHLCBar> bars = byKey.get(key(instrumentId, tf));
+        if (bars == null || bars.isEmpty() || n <= 0) {
+            return List.of();
+        }
+        List<OHLCBar> headView = new ArrayList<>(bars.headMap(toInclusive, true).values());
+        int from = Math.max(0, headView.size() - n);
+        return new ArrayList<>(headView.subList(from, headView.size()));
+    }
+
+    @Override
     public boolean putBar(OHLCBar bar, Optional<Long> ttl) {
         TreeMap<Instant, OHLCBar> bars =
                 byKey.computeIfAbsent(key(bar.instrumentId(), bar.timeframe()), k -> new TreeMap<>());

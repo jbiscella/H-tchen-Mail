@@ -19,6 +19,10 @@ import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.DomainException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
+import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
@@ -53,10 +57,19 @@ public class MonitoringRunService {
     private final HeikinAshiService heikinAshiService;
     private final PatternDetectionService detectionService;
     private final AlertDispatchService dispatchService;
+    private final StrategyRepository strategies;
+    private final StrategyAlertDispatchService strategyDispatchService;
     private final OhlcRepository ohlcRepository;
     private final HaRepository haRepository;
     private final Clock clock;
     private final Duration softTimeout;
+
+    // HA lookback window read for the strategy alert chart (overlays + candles).
+    // Matches the strategy evaluation lookback so any indicator a scenario
+    // references (warm enough to fire the alert) has enough bars to render —
+    // otherwise StrategyChartSpec.placeIndicators would drop the very overlay
+    // that triggered the alert (CLAUDE.md §9 Component 1c).
+    private static final int STRATEGY_CHART_LOOKBACK_BARS = 300;
 
     public MonitoringRunService(
             InstrumentRepository instruments,
@@ -64,6 +77,8 @@ public class MonitoringRunService {
             HeikinAshiService heikinAshiService,
             PatternDetectionService detectionService,
             AlertDispatchService dispatchService,
+            StrategyRepository strategies,
+            StrategyAlertDispatchService strategyDispatchService,
             OhlcRepository ohlcRepository,
             HaRepository haRepository,
             Clock clock,
@@ -73,6 +88,8 @@ public class MonitoringRunService {
         this.heikinAshiService = heikinAshiService;
         this.detectionService = detectionService;
         this.dispatchService = dispatchService;
+        this.strategies = strategies;
+        this.strategyDispatchService = strategyDispatchService;
         this.ohlcRepository = ohlcRepository;
         this.haRepository = haRepository;
         this.clock = clock;
@@ -124,6 +141,37 @@ public class MonitoringRunService {
                     instrumentEvents.addAll(events);
                     summary = summary.addEvents(events.size());
                     realEventForTf.merge(entry.getKey(), !events.isEmpty(), Boolean::logicalOr);
+
+                    // Strategy path (Block 15-16): a strategy supersedes the fixed
+                    // patterns (legacy detection above already returns nothing for a
+                    // strategy instrument). When the strategy's scenarios match the
+                    // latest bar, route the StrategyAlert to the dedicated dispatch.
+                    Optional<Strategy> strategy = strategies.findByInstrumentId(inst.id());
+                    if (strategy.isPresent()) {
+                        Optional<StrategyAlert> strategyAlert =
+                                detectionService.detectStrategyAlert(inst, entry.getKey(), haBars);
+                        if (strategyAlert.isPresent()) {
+                            summary = summary.addEvents(1);
+                            realEventForTf.merge(entry.getKey(), true, Boolean::logicalOr);
+                            // Raw OHLC for the strategy chart: heerwisch draws the
+                            // candles Heikin-Ashi (CandleStyle.HEIKIN_ASHI) while the
+                            // overlays read the raw close, matching the rule engine
+                            // (CLAUDE.md §9 Component 1b).
+                            List<OHLCBar> chartBars = ohlcRepository.findLastN(
+                                    inst.id(),
+                                    entry.getKey(),
+                                    strategyAlert.get().barTime(),
+                                    STRATEGY_CHART_LOOKBACK_BARS);
+                            summary = summary.withDispatch(
+                                    strategyDispatchService.dispatch(strategyAlert.get(), strategy.get(), chartBars));
+                            LOG.info(
+                                    "main_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
+                                    inst.id(),
+                                    entry.getKey().wire(),
+                                    strategyAlert.get().barTime(),
+                                    strategy.get().name());
+                        }
+                    }
                 }
 
                 // force_email escape hatch: for every tracked timeframe that did
@@ -136,8 +184,44 @@ public class MonitoringRunService {
                     InstrumentConfig cfg = instruments
                             .findConfigById(inst.id())
                             .orElseThrow(() -> new IllegalStateException("missing config for " + inst.id()));
+                    // A strategy instrument's forced smoke must route through the
+                    // dedicated strategy dispatch (strategy chart + scenario overlays
+                    // + strategy email), not degrade onto the legacy PatternEvent path
+                    // (CLAUDE.md §10 force_email, strategy-instrument scenario).
+                    Optional<Strategy> strategy = strategies.findByInstrumentId(inst.id());
                     for (Timeframe tf : cfg.trackedTimeframes()) {
                         if (Boolean.TRUE.equals(realEventForTf.get(tf))) continue;
+                        if (strategy.isPresent()) {
+                            Optional<StrategyAlert> forced = buildForcedStrategyAlert(inst, tf, strategy.get());
+                            // The chart marker sits on the trigger bar, so the OHLC bar
+                            // backing it must be present (heerwisch V7). If only the HA
+                            // bar survived (divergent retention), skip rather than dispatch
+                            // an un-renderable alert — mirroring buildForcedEvent's OHLC
+                            // guard on the pattern path.
+                            List<OHLCBar> chartBars = forced.map(a -> ohlcRepository.findLastN(
+                                            inst.id(), tf, a.barTime(), STRATEGY_CHART_LOOKBACK_BARS))
+                                    .orElseGet(List::of);
+                            boolean renderable = forced.isPresent()
+                                    && chartBars.stream().anyMatch(b -> b.barTime()
+                                            .equals(forced.get().barTime()));
+                            if (renderable) {
+                                summary = summary.addEvents(1);
+                                summary = summary.withDispatch(
+                                        strategyDispatchService.dispatch(forced.get(), strategy.get(), chartBars));
+                                LOG.info(
+                                        "main_forced_strategy_alert instrument_id={} timeframe={} bar_time={} strategy={}",
+                                        inst.id(),
+                                        tf.wire(),
+                                        forced.get().barTime(),
+                                        strategy.get().name());
+                            } else {
+                                LOG.warn(
+                                        "main_forced_event_skipped instrument_id={} timeframe={} reason=no_bar",
+                                        inst.id(),
+                                        tf.wire());
+                            }
+                            continue;
+                        }
                         Optional<PatternEvent> forced = buildForcedEvent(inst, tf);
                         if (forced.isPresent()) {
                             instrumentEvents.add(forced.get());
@@ -278,6 +362,35 @@ public class MonitoringRunService {
                 PatternSubtype.FORCED,
                 Map.of("forced", "true"),
                 snapshot,
+                clock.instant()));
+    }
+
+    /**
+     * Synthesise a forced {@link StrategyAlert} for a strategy instrument so the
+     * strategy chart + AI + email pipeline runs end-to-end without waiting for a
+     * scenario to fire. The alert is anchored on the latest persisted bar and
+     * carries a single honest {@code "forced"} line — it never claims a scenario
+     * matched (mirroring how {@link PatternKind#FORCED} is a synthetic pattern
+     * kind on the legacy path; the chart's role-derived marker therefore falls
+     * through to a neutral bar highlight). Empty when no bar is persisted yet
+     * (first ingest), so the caller logs + skips.
+     */
+    private Optional<StrategyAlert> buildForcedStrategyAlert(Instrument inst, Timeframe tf, Strategy strategy) {
+        Instant cutoff = clock.instant().plusSeconds(1);
+        Optional<HABar> latestHa = haRepository.findLatestBefore(inst.id(), tf, cutoff);
+        if (latestHa.isEmpty()) {
+            return Optional.empty();
+        }
+        StrategyAlertLine forcedLine =
+                new StrategyAlertLine("forced", "forced", Optional.empty(), Optional.empty(), Optional.empty());
+        return Optional.of(new StrategyAlert(
+                inst.id(),
+                inst.ticker(),
+                inst.exchange(),
+                tf,
+                latestHa.get().barTime(),
+                strategy.name(),
+                List.of(forcedLine),
                 clock.instant()));
     }
 }
