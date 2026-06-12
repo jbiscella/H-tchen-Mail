@@ -68,6 +68,24 @@ Feature: SI-3 — Strategy orchestration in monitoring-main
     Then a strategy email is sent to "alice@example.com"
     And the run fails with an unhandled error
 
+  # Runtime warmup (CLAUDE.md Block 16 "Insufficient history for a cross-based
+  # condition"): import-time validation guarantees enough bars at import, but
+  # retention can shorten the persisted series afterwards. A still-warming
+  # indicator must mean "scenario cannot fire yet" — never a failed run.
+  Scenario: A strategy whose indicator is still warming up produces no alert and no failure
+    Given the recipients for "AAPL" are "alice@example.com"
+    And the instrument is monitored by a strategy whose scenario "entry" has conditions:
+      | rsi(14) crosses below 30 |
+    And the provider returns these "1d" bars for "AAPL":
+      | bar_time             | open | high | low | close |
+      | 2026-05-04T00:00:00Z | 94   | 98   | 92  | 96    |
+      | 2026-05-05T00:00:00Z | 96   | 100  | 94  | 98    |
+      | 2026-05-06T00:00:00Z | 98   | 107  | 96  | 105   |
+    When I run monitoring-main
+    Then the main summary has processed=1 and succeeded=1 and failed=0
+    And the main summary reports 0 alerts sent
+    And no strategy email is sent
+
   Scenario: A strategy retry-enqueue failure fails the run like legacy
     Given the recipients for "AAPL" are "alice@example.com"
     And the instrument is monitored by a strategy whose scenario "entry" has conditions:
