@@ -11,7 +11,7 @@ import java.util.List;
 @ConfigurationProperties("monitoring.news")
 public class NewsConfig {
 
-    private List<String> providers = List.of("marketaux", "yahoo-rss");
+    private List<String> providers = List.of("marketaux", "yahoo-rss", "eodhd");
 
     public List<String> getProviders() {
         return providers;

@@ -12,8 +12,13 @@ monitoring:
   eodhd:
     # api-key is set via the MONITORING_EODHD_API_KEY env var (terraform/main/lambda.tf,
     # populated from the EODHD_KEY GitHub secret). No default — boot fails fast if missing.
+    # The news adapter (Block 17) reuses this same token and base URL.
     base-url: https://eodhd.com/api
     timeout-seconds: 10
+    news:
+      # EODHD news `content` is a full article body; the summary is truncated
+      # to this many characters at a word boundary (CLAUDE.md Block 17).
+      summary-max-chars: 600
   marketaux:
     # api-key is set via the MONITORING_MARKETAUX_API_KEY env var (terraform/main/lambda.tf,
     # populated from the MARKETAUX_KEY GitHub secret). No default — boot fails fast if missing.
@@ -42,6 +47,7 @@ monitoring:
     providers:
       - marketaux
       - yahoo-rss
+      - eodhd
   ingest:
     circuit-breaker:
       threshold: 3

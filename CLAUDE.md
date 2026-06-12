@@ -888,10 +888,12 @@ the single-purpose adapters together:
 
 - **History** → `EodhdMarketDataProvider` (this block).
 - **News** → `NewsAggregator`, which fans `fetchNewsHeadlines` out across
-  every enabled `NewsProvider` in parallel. Two ship today:
-  `MarketauxNewsProvider` (the Marketaux API, key-authed) and
+  every enabled `NewsProvider` in parallel. Three ship today:
+  `MarketauxNewsProvider` (the Marketaux API, key-authed),
   `YahooFinanceRssNewsProvider` (the Yahoo Finance headline RSS feed, no key,
-  browser `User-Agent` required). A single provider failing is logged and
+  browser `User-Agent` required), and `EodhdNewsProvider` (the EODHD News
+  API, same token and exchange-suffix map as OHLC ingestion — Block 17).
+  A single provider failing is logged and
   dropped — it does not fail the call. Results are merged, de-duplicated (by
   exact URL, or by normalized title within a one-hour window), sorted
   newest-first, and capped. `monitoring.news.providers` enables/disables a
@@ -2808,6 +2810,156 @@ Feature: Monitor an imported strategy, stateless
 
 ---
 
+## Block 17 — EODHD news provider + AI-side relevance triage
+
+**Supersedes:** nothing (third `NewsProvider` layered on the Block 3 aggregation; refined Three Amigos pass, 2026-06-12. EODHD All World Extended plan verified live: the News API responds; the sample showed loose multi-ticker tagging and advertorial noise — the design decisions below follow from that evidence).
+
+**Goal**: As the operator of H-tchen-Mail, I want EODHD added as a third news provider with analyst-side relevance triage, so that alert notes can feature stories the legacy pair missed (observable per email via `data_sources` reporting `eodhd(N)`) and advertorial items never appear in a note.
+
+**Verification mode**: no formal post-deploy acceptance check. Real-world triage quality will be assessed in a future follow-up session with actual alert emails attached. CI-verifiable parts are the Gherkin scenarios and the prompt-contract pin below.
+
+### Dependencies
+
+- `NewsProvider` port and `NewsAggregator` fan-out/dedup/cap (existing — the new provider plugs in beside `marketaux` and `yahoo-rss` in `monitoring.news.providers`).
+- EODHD symbol mapping already used by the OHLC adapter: the news adapter MUST reuse `monitoring.exchanges.suffix-map` (the EODHD codes — `.US`, `.MI`, `.LSE`, ...), NOT `monitoring.exchanges.news-suffix-map` (the common market codes used by Marketaux/Yahoo). No second EODHD mapping may be introduced.
+- EODHD API token already provisioned (same credential as OHLC ingestion — `monitoring.eodhd.api-key` via `MONITORING_EODHD_API_KEY`).
+- Existing `BedrockAiAnalyst` SYSTEM_PROMPT (extended, not rewritten).
+- The recency-window derivation already used for Marketaux (`tf` → published-after window): EODHD reuses the SAME derivation (same look-back values, same UTC-date computation), not a parallel one.
+
+### Out of scope
+
+- Carrying EODHD `sentiment` scores into the domain (`NewsHeadline` has no field for it; adding one touches domain + email + tool serialization).
+- Replacing or disabling Marketaux / Yahoo RSS.
+- Any client-side relevance heuristic (title match, symbols cap, position rules) — explicitly rejected after sample evaluation.
+- A dedicated pre-filter LLM call.
+- Changing TOP_N or the aggregator dedup rules.
+- Cross-provider dedup scenario: redundant with existing URL-dedup coverage.
+
+### Endpoint
+
+`GET https://eodhd.com/api/news?s={SYMBOL}&from={YYYY-MM-DD}&to={YYYY-MM-DD}&limit={N}&api_token=...` — `s`, `limit`, `offset` and the response shape verified live; `from`/`to` confirmed against the official EODHD News API docs (date filtering, `YYYY-MM-DD`). Response items carry `date`, `title`, `content`, `link`, `symbols`, `tags`, `sentiment`.
+
+### Data mapping (EODHD item → `NewsHeadline`)
+
+| NewsHeadline field | EODHD field | Rule |
+|---|---|---|
+| title | `title` | verbatim |
+| publishedAt | `date` | ISO 8601 with offset → `Instant` UTC |
+| source | — (absent in payload) | host of `link`; empty string on malformed link, never a failure |
+| url | `link` | verbatim |
+| summary | `content` | truncated to `monitoring.eodhd.news.summary-max-chars` (default 600), cut at the last word boundary, ellipsis appended when truncated; hard cut when no space exists within the limit; empty string when `content` is absent |
+
+The `tf` parameter scopes recency exactly as Marketaux does (EODHD `from`/`to` date filters); same window derivation, no new logic.
+
+### Behaviour (Gherkin — `features/news/news_aggregation.feature` additions)
+
+```gherkin
+Scenario: EODHD headlines are merged with the other providers
+  Given the enabled news providers are "marketaux,yahoo-rss,eodhd"
+  And the EODHD provider returns a headline published at "2026-06-12T10:00:00Z" for "NVDA" on "NASDAQ"
+  And the Marketaux provider returns a headline published at "2026-06-12T08:00:00Z" for "NVDA" on "NASDAQ"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 2 headlines are returned
+  And the first headline is the one published at "2026-06-12T10:00:00Z"
+
+Scenario: A long EODHD article body is truncated into the summary
+  Given the enabled news providers are "eodhd"
+  And the summary limit is 600 characters
+  And the EODHD provider returns a headline whose content is 4000 characters long
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the returned summary is at most 600 characters
+  And the summary ends at a word boundary with an ellipsis
+
+Scenario: A short EODHD article body is carried verbatim (control)
+  Given the enabled news providers are "eodhd"
+  And the summary limit is 600 characters
+  And the EODHD provider returns a headline whose content is 200 characters long
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the returned summary is the content verbatim, without ellipsis
+
+Scenario: An EODHD item without content yields an empty summary
+  Given the enabled news providers are "eodhd"
+  And the EODHD provider returns a headline with no content
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 1 headline is returned with an empty summary
+
+Scenario: The source is derived from the link host
+  Given the enabled news providers are "eodhd"
+  And the EODHD provider returns a headline linking to "https://finance.yahoo.com/markets/article-x"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the headline source is "finance.yahoo.com"
+
+Scenario: A malformed link yields an empty source, not a failure
+  Given the enabled news providers are "eodhd"
+  And the EODHD provider returns a headline whose link is not a valid URL
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 1 headline is returned with an empty source
+
+Scenario: The recency window passed to EODHD matches the Marketaux derivation
+  Given the enabled news providers are "marketaux,eodhd"
+  And the pattern timeframe is "1d"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the EODHD provider was queried with the same recency window as the Marketaux provider
+
+Scenario: EODHD disabled keeps the legacy pair untouched (control)
+  Given the enabled news providers are "marketaux,yahoo-rss"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the EODHD provider is never queried
+
+Scenario: A failing EODHD provider is dropped, not fatal
+  Given the enabled news providers are "marketaux,yahoo-rss,eodhd"
+  And the EODHD provider fails
+  And the Marketaux provider returns 1 headline for "NVDA" on "NASDAQ"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 1 headline is returned
+
+Scenario: A content without spaces within the limit is hard-cut
+  Given the enabled news providers are "eodhd"
+  And the summary limit is 600 characters
+  And the EODHD provider returns a headline whose content is a single 4000-character word
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the returned summary is exactly 600 characters plus an ellipsis
+
+Scenario: A non-UTC publication offset is normalized to Instant UTC
+  Given the enabled news providers are "eodhd"
+  And the EODHD provider returns a headline dated "2026-06-12T12:00:00+02:00"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the headline publishedAt is "2026-06-12T10:00:00Z"
+
+Scenario: The EODHD news query uses the configured exchange suffix
+  Given the enabled news providers are "eodhd"
+  And an instrument "ENI" on "MIL"
+  When I fetch news headlines for "ENI" on "MIL" with max 5
+  Then the EODHD provider was queried with symbol "ENI.MI"
+```
+
+### Prompt extension (SYSTEM_PROMPT, new RELEVANCE block before CORROBORATING)
+
+Add a RELEVANCE instruction stating, in substance:
+
+- Treat fetched news items as *candidates*, not facts about the instrument: multi-ticker tagging is loose, and promotional/advertorial items (stock picks, "act now", newsletter upsells) may carry the ticker only as a passing mention.
+- Discard from consideration any item that is promotional in nature or where the instrument is incidental to the story; never feature such an item in CORROBORATING or CONTRADICTING.
+- If, after triage, no fetched item is genuinely about the instrument, say so explicitly (the existing "say so rather than padding" rule already covers the wording).
+
+Wording is delegated; the three behaviours above are the contract. The existing CONFIDENCE instruction is untouched — discarded items must not count as evidence.
+
+**Prompt-contract verification**: the relevance triage lives in the prompt, so it is verified at the snapshot level, not behaviourally — `BedrockAiAnalystTest` pins the presence of the RELEVANCE block in the system prompt sent to Bedrock, so a prompt regression fails CI. No attempt to unit-test the model's judgment; its real-world quality is assessed in the future follow-up session (Verification mode above).
+
+### Config and constraints
+
+- New config key `monitoring.eodhd.news.summary-max-chars` (default 600). Endpoint/token/timeout reuse the existing `monitoring.eodhd` section (same credential and base URL as OHLC ingestion).
+- One new provider id `eodhd` accepted by `monitoring.news.providers`; enabled by default in `application.yml` (the goal requires `eodhd(N)` observable in real alert emails).
+- New Cucumber steps only where the existing news-aggregation step vocabulary cannot express the truncation / source / recency-window assertions.
+- No changes to `NewsHeadline`, `NewsAggregator` ordering/dedup, TOP_N, or any dispatch/retry path. If implementation pressure suggests otherwise, stop and report.
+
+**Queued decisions (deliberately NOT in this increment)**:
+1. EODHD `sentiment` in the domain (needs a new `NewsHeadline` field + email rendering + tool serialization).
+2. Empirical validation of EODHD sentiment before using it (the 3 live samples had polarity 0.91–0.99 even on advertorials).
+3. Separate tickets already agreed: spec-maintenance D1–D4, dedup post-send G4, AI cases (multi-tool, tool-empty).
+4. Triage-quality follow-up with real alert emails attached (future session).
+
+---
+
 ## Dependency order
 
 | Block | Supersedes | On H-tchen critical path | Depends on |
@@ -2818,6 +2970,7 @@ Feature: Monitor an imported strategy, stateless
 | 14 chart | Block 6 (chart half) | yes | — |
 | 15 detection | Block 5 | yes | 11 |
 | 16 strategy behaviour | — | yes | 15 |
+| 17 EODHD news + triage | — | no | 13 (suffix map + token), Block 3 aggregation |
 
 Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), then 12 → 13 → 14 (consolidation, rising risk). 12/13/14 are independent of each other after 11.
 
@@ -2909,11 +3062,12 @@ is, why it's deferred, and when/how to address it.
 | `/monitoring/eodhd/base-url`                      | String        | `https://eodhd.com/api`                          | EODHD history API                  |
 | `/monitoring/eodhd/timeout-seconds`               | String        | `10`                                             |                                    |
 | `/monitoring/eodhd/api-key`                       | SecureString  | —                                                | env `MONITORING_EODHD_API_KEY`     |
+| `/monitoring/eodhd/news/summary-max-chars`        | String        | `600`                                            | EODHD news `content` → summary truncation (Block 17) |
 | `/monitoring/marketaux/base-url`                  | String        | `https://api.marketaux.com/v1`                   | Marketaux news API                 |
 | `/monitoring/marketaux/api-key`                   | SecureString  | —                                                | env `MONITORING_MARKETAUX_API_KEY` |
 | `/monitoring/marketaux/recency-days-1d`           | String        | `7`                                              | `published_after` window, daily timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1D` |
 | `/monitoring/marketaux/recency-days-1w`           | String        | `30`                                             | `published_after` window, weekly timeframe; env `MONITORING_MARKETAUX_RECENCY_DAYS_1W` |
-| `/monitoring/news/providers`                      | String (list) | `marketaux,yahoo-rss`                            | enabled news adapters              |
+| `/monitoring/news/providers`                      | String (list) | `marketaux,yahoo-rss,eodhd`                      | enabled news adapters              |
 | `/monitoring/bootstrap/size-1d`                   | String        | `250`                                            |                                    |
 | `/monitoring/bootstrap/size-1w`                   | String        | `260`                                            |                                    |
 | `/monitoring/exchanges/supported`                 | String (csv)  | `NASDAQ,NYSE,MIL,XETRA,LSE,TSX,PAR,AMS,SWX,BME`  |                                    |
