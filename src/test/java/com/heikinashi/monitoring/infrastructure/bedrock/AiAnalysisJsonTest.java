@@ -35,6 +35,19 @@ class AiAnalysisJsonTest {
     }
 
     @Test
+    void tolerates_raw_newlines_inside_string_literals() {
+        // Codex P2 on PR #85: a model following the blank-line FORMAT
+        // instruction literally may emit an actual line break inside the JSON
+        // string. Strict JSON forbids it; the parser must accept it anyway so
+        // the AI note is not lost to the readability instruction itself.
+        String raw = "{\"corroborating\":\"First story.\n\nSecond story.\","
+                + "\"confidence\":\"MEDIUM\",\"data_sources\":[\"news_headlines(5)\"]}";
+        AiAnalysis a = AiAnalysisJson.parse(raw);
+        assertThat(a.corroborating()).contains("First story.\n\nSecond story.");
+        assertThat(a.confidence()).isEqualTo(AiConfidence.MEDIUM);
+    }
+
+    @Test
     void treats_empty_strings_as_absent_optional_fields() {
         String raw = "{\"corroborating\":\"\",\"contradicting\":\"\",\"confidence\":\"HIGH\",\"data_sources\":[]}";
         AiAnalysis a = AiAnalysisJson.parse(raw);
