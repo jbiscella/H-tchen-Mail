@@ -2,16 +2,17 @@ package com.heikinashi.monitoring.infrastructure.bedrock;
 
 import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.HaRepository;
+import com.heikinashi.monitoring.domain.OhlcRepository;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import com.heikinashi.monitoring.infrastructure.chart.ConfiguredChartIndicators;
+import com.heikinashi.monitoring.infrastructure.chart.HaLookbackWindow;
 import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -29,32 +30,35 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Before this, the analyst received eight numbers (the alert bar's four HA values and
  * four raw OHLC values) and nothing else — no trend, no indicator levels — while the
- * chart rendered beside it carried a 30-bar lookback, moving averages and an RSI
+ * chart rendered beside it carried a lookback window, moving averages and an RSI
  * sub-pane. Notes consequently hedged about context the reader could see ("presumably
- * trading near the $195–$200 band") and never once cited an RSI value across a 15-email
+ * trading near the $195-$200 band") and never once cited an RSI value across a 15-email
  * sample, despite RSI being plotted in all 15.
  *
- * <p><strong>One source of truth.</strong> The window is loaded through the same
- * {@link HaRepository#findLastNBefore} call and {@code lookback-bars} setting the
- * renderer uses, and the indicator set is resolved through the same helper — per flow:
+ * <p><strong>The two flows are not the same chart, so the basis differs per flow.</strong>
+ * Making it uniform was the P1 defect in the first version of this class:
  *
  * <ul>
- *   <li>{@link PatternEvent} → {@link ConfiguredChartIndicators#derive(ChartConfig)}
- *       (whatever {@code monitoring.chart} enables).</li>
- *   <li>{@link StrategyAlert} → {@link StrategyChartIndicators#derive} over the
- *       instrument's strategy (whatever its conditions reference).</li>
+ *   <li>{@link PatternEvent} → HA candles. Series is the {@code HABar} window from
+ *       {@link HaLookbackWindow}; indicators evaluate on {@code ha_close}, matching the
+ *       pattern chart's {@link PriceSource#HA_CLOSE} overlays.</li>
+ *   <li>{@link StrategyAlert} → <em>raw</em> OHLC. {@code StrategyChartSpec} builds a
+ *       commons OHLC series and {@link StrategyChartIndicators} uses
+ *       {@link PriceSource#CLOSE}, so the series is the {@code OHLCBar} window from
+ *       {@link OhlcRepository#findLastN} and indicators evaluate on the raw close.</li>
  * </ul>
  *
- * The set is never hardcoded here: an operator who disables the RSI sub-pane, or a
- * strategy that references MACD instead of SMA, changes both the image and this block
- * together.
+ * Serving a strategy alert from the HA series would print values that disagree with both
+ * the attached strategy chart and the DSL condition that fired the alert — the exact
+ * failure this block exists to prevent.
  *
- * <p><strong>Why the HA close.</strong> Indicator values come from {@code dsl-eval}'s
- * {@link BarIndicatorSource}, which computes over a bar's close. The chart computes its
- * overlays over {@link PriceSource#HA_CLOSE}, so the window is mapped to commons bars
- * with {@code ha_close} as the close before evaluation. A raw-close basis would print
- * numbers that disagree with the lines in the image beside them — the exact failure this
- * block exists to prevent.
+ * <p>The indicator set is likewise resolved per flow through the same helper the
+ * corresponding renderer uses ({@link ConfiguredChartIndicators} from
+ * {@code monitoring.chart}, or {@link StrategyChartIndicators} from the strategy's
+ * conditions), never hardcoded here.
+ *
+ * <p>Values come from {@code dsl-eval}'s {@link BarIndicatorSource}, already on the
+ * classpath for strategy evaluation, so no new dependency.
  */
 @Singleton
 public class TechnicalContextBuilder {
@@ -64,72 +68,109 @@ public class TechnicalContextBuilder {
     /** How many trailing values of each indicator to show, so direction is readable, not just level. */
     private static final int PATH_POINTS = 5;
 
+    /**
+     * The raw window the strategy evaluator and strategy chart use
+     * ({@code PatternDetectionService.STRATEGY_LOOKBACK_BARS}). Indicators compute over all
+     * of it so long-period ones are warm; only the printed table is truncated to
+     * {@code lookback-bars}.
+     */
+    private static final int STRATEGY_LOOKBACK_BARS = 300;
+
     private final HaRepository haRepository;
+    private final OhlcRepository ohlcRepository;
     private final ChartConfig chartConfig;
     private final StrategyRepository strategyRepository;
 
     public TechnicalContextBuilder(
-            HaRepository haRepository, ChartConfig chartConfig, StrategyRepository strategyRepository) {
+            HaRepository haRepository,
+            OhlcRepository ohlcRepository,
+            ChartConfig chartConfig,
+            StrategyRepository strategyRepository) {
         this.haRepository = haRepository;
+        this.ohlcRepository = ohlcRepository;
         this.chartConfig = chartConfig;
         this.strategyRepository = strategyRepository;
     }
 
-    /** Context for a pattern alert: chart indicators come from {@code monitoring.chart}. */
+    /**
+     * Context for a pattern alert: HA series, {@code ha_close} basis, chart indicators from
+     * {@code monitoring.chart}. Uses the shared lookback helper, so the triggering bar is
+     * present here whenever it is present on the chart — including the
+     * {@code SNAPSHOT_ONLY} retry case where retention has already deleted it.
+     */
     public String forPatternEvent(PatternEvent event) {
+        List<HABar> bars = HaLookbackWindow.forEvent(haRepository, event, chartConfig.getLookbackBars());
         return render(
-                window(event.instrumentId(), event.timeframe(), event.barTime()),
+                "Heikin-Ashi bars",
+                haRows(bars),
+                toHaCloseBars(bars),
                 ConfiguredChartIndicators.derive(chartConfig),
-                event.timeframe());
+                event.timeframe(),
+                bars.size());
     }
 
     /**
-     * Context for a strategy alert: chart indicators come from the instrument's strategy,
-     * matching the strategy-driven overlays. A missing strategy yields the bar series with
-     * no indicators rather than an error — the series alone is already more than this flow
+     * Context for a strategy alert: raw OHLC series, raw-close basis, indicators derived
+     * from the instrument's strategy. A missing strategy yields the series with no
+     * indicators rather than an error — the series alone is already more than this flow
      * carried before, which was no bar values at all.
      */
     public String forStrategyAlert(StrategyAlert alert) {
+        List<com.heikinashi.monitoring.domain.OHLCBar> bars = ohlcRepository.findLastN(
+                alert.instrumentId(), alert.timeframe(), alert.barTime(), STRATEGY_LOOKBACK_BARS);
         List<Indicator> indicators = strategyRepository
                 .findByInstrumentId(alert.instrumentId())
                 .map(StrategyChartIndicators::derive)
                 .orElseGet(List::of);
-        return render(window(alert.instrumentId(), alert.timeframe(), alert.barTime()), indicators, alert.timeframe());
-    }
-
-    /** The chart's lookback window: same repository call, same cutoff, same bar count. */
-    private List<HABar> window(String instrumentId, Timeframe tf, Instant barTime) {
-        return haRepository.findLastNBefore(instrumentId, tf, barTime.plusNanos(1), chartConfig.getLookbackBars());
-    }
-
-    private String render(List<HABar> bars, List<Indicator> indicators, Timeframe tf) {
         if (bars.isEmpty()) {
+            return "";
+        }
+        // Compute over the whole loaded window (long periods need it); print only the tail.
+        int shown = Math.min(bars.size(), chartConfig.getLookbackBars());
+        List<com.heikinashi.monitoring.domain.OHLCBar> tail = bars.subList(bars.size() - shown, bars.size());
+        return render("raw OHLC bars", ohlcRows(tail), toRawBars(bars), indicators, alert.timeframe(), shown);
+    }
+
+    private String render(
+            String seriesLabel,
+            List<String> rows,
+            List<OHLCBar> forEvaluation,
+            List<Indicator> indicators,
+            Timeframe tf,
+            int shown) {
+        if (shown == 0) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
         sb.append("Chart context — the same series the attached chart draws (")
-                .append(bars.size())
-                .append(" Heikin-Ashi bars on ")
+                .append(shown)
+                .append(" ")
+                .append(seriesLabel)
+                .append(" on ")
                 .append(tf.wire())
                 .append(", oldest first):\n");
-        sb.append("  bar_time  ha_open  ha_high  ha_low  ha_close  colour\n");
-        for (HABar bar : bars) {
-            sb.append("  ")
-                    .append(bar.barTime())
-                    .append("  ")
-                    .append(bar.haOpen())
-                    .append("  ")
-                    .append(bar.haHigh())
-                    .append("  ")
-                    .append(bar.haLow())
-                    .append("  ")
-                    .append(bar.haClose())
-                    .append("  ")
-                    .append(colourOf(bar))
-                    .append("\n");
-        }
-        appendIndicators(sb, bars, indicators);
+        rows.forEach(r -> sb.append("  ").append(r).append("\n"));
+        appendIndicators(sb, forEvaluation, indicators);
         return sb.toString();
+    }
+
+    private static List<String> haRows(List<HABar> bars) {
+        List<String> rows = new ArrayList<>(bars.size() + 1);
+        rows.add("bar_time  ha_open  ha_high  ha_low  ha_close  colour");
+        for (HABar b : bars) {
+            rows.add("%s  %s  %s  %s  %s  %s"
+                    .formatted(b.barTime(), b.haOpen(), b.haHigh(), b.haLow(), b.haClose(), colourOf(b)));
+        }
+        return rows;
+    }
+
+    private static List<String> ohlcRows(List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        List<String> rows = new ArrayList<>(bars.size() + 1);
+        rows.add("bar_time  open  high  low  close");
+        for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
+            rows.add("%s  %s  %s  %s  %s".formatted(b.barTime(), b.open(), b.high(), b.low(), b.close()));
+        }
+        return rows;
     }
 
     /** HA candle colour, the same rule the chart paints by. */
@@ -138,23 +179,25 @@ public class TechnicalContextBuilder {
         return cmp > 0 ? "green" : cmp < 0 ? "red" : "flat";
     }
 
-    private void appendIndicators(StringBuilder sb, List<HABar> bars, List<Indicator> indicators) {
-        List<OHLCBar> commonsBars = toHaCloseBars(bars);
+    private void appendIndicators(StringBuilder sb, List<OHLCBar> bars, List<Indicator> indicators) {
         List<String> lines = new ArrayList<>();
         for (Indicator indicator : indicators) {
-            // Honour the renderer's skip rule (heerwisch V6): an indicator whose period
-            // exceeds the window is not drawn, so it must not be described either.
+            // Honour the renderers' skip rule: an indicator whose period exceeds the window
+            // is not drawn, so it must not be described either. Both renderers accept it when
+            // bars == minBars, so this comparison is strictly-less, matching them exactly.
             if (bars.size() < indicator.minBars()) {
                 LOG.debug("technical_context_skipping_indicator reason=window_too_short indicator={}", indicator);
                 continue;
             }
-            dslCall(indicator).ifPresent(call -> line(commonsBars, call).ifPresent(lines::add));
+            for (DslCall call : dslCalls(indicator)) {
+                line(bars, call).ifPresent(lines::add);
+            }
         }
         if (lines.isEmpty()) {
             return;
         }
-        sb.append("\nIndicator values at the alert bar, computed on the Heikin-Ashi close so they")
-                .append(" match the overlays drawn on the chart (oldest→newest path in brackets):\n");
+        sb.append("\nIndicator values at the alert bar, on the same price basis as the drawn")
+                .append(" overlays (oldest→newest path in brackets):\n");
         lines.forEach(l -> sb.append("  ").append(l).append("\n"));
     }
 
@@ -165,7 +208,11 @@ public class TechnicalContextBuilder {
      */
     private Optional<String> line(List<OHLCBar> bars, DslCall call) {
         List<BigDecimal> path = new ArrayList<>();
-        int from = Math.max(call.minBars(), bars.size() - PATH_POINTS);
+        // minBars - 1 is the zero-based index of the first bar at which the indicator is
+        // warm. Using minBars itself omitted the indicator whenever the window was exactly
+        // its minimum (e.g. SMA(30) on a 30-bar lookback) — which both charts do draw.
+        int firstWarm = Math.max(0, call.minBars() - 1);
+        int from = Math.max(firstWarm, bars.size() - PATH_POINTS);
         for (int i = from; i < bars.size(); i++) {
             valueAt(bars, i, call).ifPresent(path::add);
         }
@@ -199,7 +246,10 @@ public class TechnicalContextBuilder {
         }
     }
 
-    /** The HA window as commons bars whose close is {@code ha_close} (see class javadoc). */
+    /**
+     * The HA window as commons bars whose close is {@code ha_close}, so evaluated values
+     * match the pattern chart's {@code PriceSource.HA_CLOSE} overlays.
+     */
     private static List<OHLCBar> toHaCloseBars(List<HABar> bars) {
         List<OHLCBar> out = new ArrayList<>(bars.size());
         for (HABar bar : bars) {
@@ -209,39 +259,51 @@ public class TechnicalContextBuilder {
         return out;
     }
 
+    /** The raw window as commons bars, matching the strategy chart's {@code PriceSource.CLOSE}. */
+    private static List<OHLCBar> toRawBars(List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        List<OHLCBar> out = new ArrayList<>(bars.size());
+        for (com.heikinashi.monitoring.domain.OHLCBar bar : bars) {
+            out.add(new OHLCBar(bar.barTime(), bar.open(), bar.high(), bar.low(), bar.close(), Optional.empty()));
+        }
+        return out;
+    }
+
     /**
      * A heerwisch chart indicator mapped to the {@code dsl-eval} function that computes
      * it. An indicator with no numeric equivalent yields empty and is simply not described.
      */
-    private static Optional<DslCall> dslCall(Indicator indicator) {
+    private static List<DslCall> dslCalls(Indicator indicator) {
         return switch (indicator) {
-            case Indicator.SMA sma -> Optional.of(DslCall.of("sma", "SMA(" + sma.period() + ")", sma.period()));
-            case Indicator.EMA ema -> Optional.of(DslCall.of("ema", "EMA(" + ema.period() + ")", ema.period()));
-            case Indicator.RSI rsi -> Optional.of(DslCall.of("rsi", "RSI(" + rsi.period() + ")", rsi.period()));
-            case Indicator.ATR atr -> Optional.of(DslCall.of("atr", "ATR(" + atr.period() + ")", atr.period()));
-            case Indicator.StdDev sd -> Optional.of(DslCall.of("stddev", "StdDev(" + sd.period() + ")", sd.period()));
+            case Indicator.SMA sma -> List.of(DslCall.of("sma", "SMA(" + sma.period() + ")", sma.period()));
+            case Indicator.EMA ema -> List.of(DslCall.of("ema", "EMA(" + ema.period() + ")", ema.period()));
+            case Indicator.RSI rsi -> List.of(DslCall.of("rsi", "RSI(" + rsi.period() + ")", rsi.period()));
+            case Indicator.ATR atr -> List.of(DslCall.of("atr", "ATR(" + atr.period() + ")", atr.period()));
+            case Indicator.StdDev sd -> List.of(DslCall.of("stddev", "StdDev(" + sd.period() + ")", sd.period()));
+            // All three MACD components, because the sub-pane draws all three. Reporting
+            // only macd_line described a third of what the reader can see, and the line
+            // alone cannot express the cross the strategy may have keyed on.
             case Indicator.MACD macd -> {
-                String label = "MACD(" + macd.fastPeriod() + "," + macd.slowPeriod() + "," + macd.signalPeriod() + ")";
-                yield Optional.of(new DslCall(
-                        "macd_line",
-                        label,
-                        List.of(
-                                BigDecimal.valueOf(macd.fastPeriod()),
-                                BigDecimal.valueOf(macd.slowPeriod()),
-                                BigDecimal.valueOf(macd.signalPeriod())),
-                        macd.slowPeriod()));
+                String args = macd.fastPeriod() + "," + macd.slowPeriod() + "," + macd.signalPeriod();
+                List<BigDecimal> periods = List.of(
+                        BigDecimal.valueOf(macd.fastPeriod()),
+                        BigDecimal.valueOf(macd.slowPeriod()),
+                        BigDecimal.valueOf(macd.signalPeriod()));
+                yield List.of(
+                        new DslCall("macd_line", "MACD line(" + args + ")", periods, macd.slowPeriod()),
+                        new DslCall("macd_signal", "MACD signal(" + args + ")", periods, macd.slowPeriod()),
+                        new DslCall("macd_histogram", "MACD histogram(" + args + ")", periods, macd.slowPeriod()));
             }
             case Indicator.RollingMax max ->
-                Optional.of(DslCall.of(
+                List.of(DslCall.of(
                         max.priceSource() == PriceSource.HIGH ? "highest_high" : "highest_close",
                         "HHV(" + max.period() + ")",
                         max.period()));
             case Indicator.RollingMin min ->
-                Optional.of(DslCall.of(
+                List.of(DslCall.of(
                         min.priceSource() == PriceSource.LOW ? "lowest_low" : "lowest_close",
                         "LLV(" + min.period() + ")",
                         min.period()));
-            default -> Optional.empty();
+            default -> List.of();
         };
     }
 

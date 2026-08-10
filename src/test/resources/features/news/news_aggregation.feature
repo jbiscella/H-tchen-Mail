@@ -265,3 +265,14 @@ Feature: Block 3 — news aggregation across providers
     And the enabled news providers are "yahoo-rss"
     When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
     Then 0 headlines are returned
+
+  Scenario: A future-dated headline is excluded from the recency window
+    Given the pattern timeframe is "1d"
+    And a news provider "yahoo-rss" returning:
+      | title     | published_at         | url          |
+      | scheduled | 2026-06-20T00:00:00Z | https://y/fu |
+      | genuine   | 2026-06-11T00:00:00Z | https://y/ok |
+    And the enabled news providers are "yahoo-rss"
+    When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+    Then 1 headline is returned
+    And the aggregated headlines are "genuine"

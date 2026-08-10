@@ -105,8 +105,13 @@ public class NewsAggregator {
 
         Instant windowStart =
                 recency.publishedAfter(clock, tf).atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant windowEnd = clock.instant();
+        // Both bounds. Enforcing only the lower one let a scheduled article — or an upstream
+        // clock/date error — pass as "recent"; the newest-first sort would then rank it above
+        // every legitimate item and let it consume the final cap.
         List<NewsHeadline> inWindow = merged.stream()
-                .filter(h -> !h.publishedAt().isBefore(windowStart))
+                .filter(h -> !h.publishedAt().isBefore(windowStart)
+                        && !h.publishedAt().isAfter(windowEnd))
                 .toList();
 
         List<Pattern> promotional = promotionalPatterns();

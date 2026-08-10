@@ -3127,14 +3127,35 @@ Required behaviour:
 - **Window** = the same `monitoring.chart.lookback-bars` (default 30) window as
   the chart, loaded the same way (`HaRepository.findLastNBefore(instrumentId, tf,
   barTime+1ns, lookbackBars)`), ending at the pattern/alert bar.
-- **Per-bar series**: the **HA series the chart actually draws** — for each
-  `HABar` in the window, its bar time, `ha_open`/`ha_high`/`ha_low`/`ha_close`,
-  and HA colour. The chart plots HA candles only and the renderer reads only
-  `HaRepository`, so a raw-OHLC window would be *more* than the chart shows and
-  would need a second repository; it is therefore excluded. Raw OHLC for the
-  **alert bar** is unaffected — it is already in the message via
-  `event.barSnapshot()`, which is what let a note in the sample correctly compare
-  the raw close against the HA close.
+- **Per-bar series — per flow, because the two charts are not the same chart.**
+  This was wrong in the first implementation and is corrected here (found by a
+  Codex review of PR #86, P1):
+
+  | Flow | Chart draws | Context series | Indicator basis |
+  |---|---|---|---|
+  | `PatternEvent` | HA candles from `HaRepository` | `HABar` window: bar time, `ha_open`/`ha_high`/`ha_low`/`ha_close`, HA colour | `ha_close` |
+  | `StrategyAlert` | **raw OHLC** from `OhlcRepository` (`StrategyChartSpec` builds `toCommonsOhlcSeries`, and `StrategyChartIndicators` uses `PriceSource.CLOSE`) | `OHLCBar` window: bar time, `open`/`high`/`low`/`close` | raw `close` |
+
+  Using the HA series for a strategy alert would print values disagreeing with
+  both the attached strategy chart *and* the DSL condition that fired the alert —
+  the exact failure this block exists to prevent. The basis follows the chart, so
+  it differs per flow rather than being uniform.
+
+  Raw OHLC for the **alert bar** in the pattern flow is unaffected — already in
+  the message via `event.barSnapshot()`, which is what let a note in the sample
+  correctly compare the raw close against the HA close.
+
+- **Missing triggering bar.** Under `SNAPSHOT_ONLY` retention a retried alert's
+  bar may already be deleted. `HeerwischChartRenderer.fetchLookback` repairs that
+  from `event.barSnapshot()` so the chart still contains the triggering candle;
+  the context MUST apply the same repair through a shared helper, or the chart and
+  the note would disagree about whether the alert bar exists (Codex P2).
+
+- **Strategy window.** The strategy flow loads the same raw window the evaluator
+  and chart use (`OhlcRepository.findLastN`, `STRATEGY_LOOKBACK_BARS`) so
+  long-period indicators are warm, but **displays** only the trailing
+  `lookback-bars` rows. Indicator values are computed over the full loaded window;
+  only the printed table is truncated, and it says how many bars it is showing.
 - **Indicator values**: for each resolved indicator, its value at the alert bar
   plus its path over the window (so direction and level are both readable — the
   RSI-never-cited gap above is a level+direction gap).

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.heikinashi.monitoring.application.InMemoryHaRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
+import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
 import com.heikinashi.monitoring.application.InMemoryStrategyRepository;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiConfidence;
@@ -21,6 +22,8 @@ import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.LLMException;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -68,6 +71,18 @@ class BedrockAiAnalystTest {
 
     /** A minimal valid END_TURN payload for tests whose subject is the request, not the reply. */
     private static final String ANALYSIS_JSON = "{\"confidence\":\"HIGH\",\"data_sources\":[]}";
+
+    /** Strategy-flow counterpart of {@link #EVENT}, for the raw-series assertions. */
+    private static final StrategyAlert STRATEGY_ALERT = new StrategyAlert(
+            "abc-123",
+            "AAPL",
+            "NASDAQ",
+            Timeframe.D1,
+            Instant.parse("2026-05-06T00:00:00Z"),
+            "demo-strategy",
+            List.of(new StrategyAlertLine(
+                    "enter long", "long_entry", Optional.empty(), Optional.empty(), Optional.empty())),
+            Instant.parse("2026-05-07T22:00:00Z"));
 
     @Test
     void single_END_TURN_response_yields_AiAnalysis() {
@@ -279,14 +294,94 @@ class BedrockAiAnalystTest {
         HaRepository failing = Mockito.mock(HaRepository.class);
         when(failing.findLastNBefore(any(), any(), any(), Mockito.anyInt()))
                 .thenThrow(new IllegalStateException("repository down"));
-        TechnicalContextBuilder exploding =
-                new TechnicalContextBuilder(failing, chartConfig(), new InMemoryStrategyRepository());
+        TechnicalContextBuilder exploding = new TechnicalContextBuilder(
+                failing, new InMemoryOhlcRepository(), chartConfig(), new InMemoryStrategyRepository());
 
         AiAnalysis result = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), exploding)
                 .analyze(EVENT);
 
         assertThat(result.confidence()).isEqualTo(AiConfidence.HIGH);
         assertThat(capturedUserText(client)).doesNotContain("Chart context");
+    }
+
+    // --- Codex PR #86 review fixes ---------------------------------------------
+
+    @Test
+    void an_indicator_whose_period_equals_the_window_is_still_evaluated() {
+        // Codex P2: `from = max(minBars, size - PATH_POINTS)` made the loop run zero times
+        // when the window was exactly minBars, so SMA(30) on a 30-bar lookback appeared on
+        // the chart (which accepts bars == minBars) but not in the note.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(30);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), contextWith(30, config))
+                .analyze(EVENT);
+
+        assertThat(capturedUserText(client)).contains("SMA(30) = ");
+    }
+
+    @Test
+    void the_triggering_bar_is_restored_when_retention_removed_it() {
+        // Codex P2: under SNAPSHOT_ONLY a retried alert's HA bar may be gone. The chart
+        // repairs it from the event snapshot; the context must agree, or the two disagree
+        // about whether the alert bar exists.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        // Empty HA repository = retention removed everything, including the alert bar.
+        TechnicalContextBuilder context = new TechnicalContextBuilder(
+                new InMemoryHaRepository(),
+                new InMemoryOhlcRepository(),
+                chartConfig(),
+                new InMemoryStrategyRepository());
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context).analyze(EVENT);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("Chart context");
+        assertThat(user).contains("1 Heikin-Ashi bars");
+        assertThat(user).contains(EVENT.barTime().toString());
+    }
+
+    @Test
+    void a_strategy_alert_uses_the_raw_ohlc_series_not_the_ha_series() {
+        // Codex P1: the strategy chart is a RAW OHLC chart with PriceSource.CLOSE
+        // indicators, so serving this flow from the HA series printed values disagreeing
+        // with both the chart and the condition that fired.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        InMemoryOhlcRepository ohlc = new InMemoryOhlcRepository();
+        for (int i = 1; i <= 30; i++) {
+            BigDecimal close = new BigDecimal(200 + i);
+            ohlc.putBar(
+                    new com.heikinashi.monitoring.domain.OHLCBar(
+                            STRATEGY_ALERT.instrumentId(),
+                            STRATEGY_ALERT.timeframe(),
+                            STRATEGY_ALERT.barTime().minusSeconds((30 - i) * 86400L),
+                            close.subtract(BigDecimal.ONE),
+                            close.add(BigDecimal.ONE),
+                            close.subtract(BigDecimal.ONE),
+                            close,
+                            Optional.empty(),
+                            "test",
+                            EVENT.detectedAt()),
+                    Optional.empty());
+        }
+        // An HA repository that would answer with different numbers if it were consulted.
+        TechnicalContextBuilder context = new TechnicalContextBuilder(
+                new InMemoryHaRepository(), ohlc, chartConfig(), new InMemoryStrategyRepository());
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context)
+                .analyze(STRATEGY_ALERT);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("raw OHLC bars");
+        assertThat(user).contains("bar_time  open  high  low  close");
+        assertThat(user).doesNotContain("ha_close");
     }
 
     /** The USER-role text of the first captured request. */
@@ -302,7 +397,11 @@ class BedrockAiAnalystTest {
 
     /** A context builder over an empty HA repository — yields no block, so pre-Block-18 assertions hold. */
     private static TechnicalContextBuilder emptyContext() {
-        return new TechnicalContextBuilder(new InMemoryHaRepository(), chartConfig(), new InMemoryStrategyRepository());
+        return new TechnicalContextBuilder(
+                new InMemoryHaRepository(),
+                new InMemoryOhlcRepository(),
+                chartConfig(),
+                new InMemoryStrategyRepository());
     }
 
     private static TechnicalContextBuilder contextWithBars(int bars) {
@@ -331,7 +430,8 @@ class BedrockAiAnalystTest {
                             EVENT.detectedAt()),
                     Optional.empty());
         }
-        return new TechnicalContextBuilder(repo, config, new InMemoryStrategyRepository());
+        return new TechnicalContextBuilder(
+                repo, new InMemoryOhlcRepository(), config, new InMemoryStrategyRepository());
     }
 
     // -------- helpers --------------------------------------------------------

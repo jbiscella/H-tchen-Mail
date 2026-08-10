@@ -8,9 +8,6 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -77,29 +74,7 @@ public class HeerwischChartRenderer implements ChartRenderer {
     }
 
     private List<HABar> fetchLookback(PatternEvent event) {
-        Instant cutoff = event.barTime().plusNanos(1);
-        List<HABar> bars = new ArrayList<>(haRepository.findLastNBefore(
-                event.instrumentId(), event.timeframe(), cutoff, config.getLookbackBars()));
-        // Under SNAPSHOT_ONLY a later ingest can delete the triggering HA bar
-        // before a queued alert is retried, so the lookback may no longer contain
-        // event.barTime(). The BarHighlight must point at a bar that is in the
-        // series (heerwisch V7), so synthesize the triggering bar from the event's
-        // snapshot when it is missing.
-        boolean hasEventBar = bars.stream().anyMatch(b -> b.barTime().equals(event.barTime()));
-        if (!hasEventBar) {
-            bars.add(new HABar(
-                    event.instrumentId(),
-                    event.timeframe(),
-                    event.barTime(),
-                    event.barSnapshot().haOpen(),
-                    event.barSnapshot().haHigh(),
-                    event.barSnapshot().haLow(),
-                    event.barSnapshot().haClose(),
-                    event.detectedAt()));
-        }
-        // heerwisch requires strictly-ascending, unique bar times (V3/V4).
-        bars.sort(Comparator.comparing(HABar::barTime));
-        return bars;
+        return HaLookbackWindow.forEvent(haRepository, event, config.getLookbackBars());
     }
 
     private ChartSpec buildSpec(PatternEvent event, List<HABar> bars)
