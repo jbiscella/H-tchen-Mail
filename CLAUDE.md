@@ -3120,13 +3120,28 @@ Required behaviour:
   build the `ChartSpec` and the list serialized into the user message MUST be the
   same resolved value, obtained from the same call. A second, parallel derivation
   in the prompt builder is a spec violation.
-- **Honour the renderer's skip rule.** `addIndicators` skips any indicator whose
-  period exceeds the window (heerwisch V6). A skipped indicator MUST be absent
-  from the serialized context too — or present with an explicit
-  warmup-insufficient marker — never silently emitted with a partial value.
+- **Honour the chart's placement rules — all of them.** An indicator is described
+  only if the chart actually draws it, and *three* rules decide that, not one.
+  All three are the renderers' own:
+  1. an indicator whose minimum window exceeds the available bars is skipped
+     (heerwisch V6) — the comparison is strictly-less, so `bars == minBars` draws;
+  2. duplicates collapse by indicator identity;
+  3. non-`MAIN` indicators are placed into a **fixed set of eight subplot slots**,
+     so a ninth oscillator onward is silently not drawn.
+
+  Rule 3 was missed in the first implementation (Codex P2): a strategy referencing
+  more than eight distinct oscillators (several RSI / MACD / ATR / StdDev periods)
+  would have the note describing sub-panes absent from the image. Because the same
+  loop was already duplicated between `HeerwischChartRenderer.addIndicators` and
+  `StrategyChartSpec.placeIndicators`, the rules live in **one** shared helper —
+  `ChartIndicatorPlacement.drawn(indicators, bars)`, returning the drawn indicators
+  *with their assigned panes*, in draw order — consumed by both renderers and by the
+  context builder. A fourth re-implementation is a spec violation; adding a subplot
+  slot must change the drawn set and the described set together, by construction.
 - **Window** = the same `monitoring.chart.lookback-bars` (default 30) window as
   the chart, loaded the same way (`HaRepository.findLastNBefore(instrumentId, tf,
-  barTime+1ns, lookbackBars)`), ending at the pattern/alert bar.
+  barTime+1ns, lookbackBars)`), ending at the pattern/alert bar. (Pattern flow;
+  the strategy flow does not load its own window at all — see below.)
 - **Per-bar series — per flow, because the two charts are not the same chart.**
   This was wrong in the first implementation and is corrected here (found by a
   Codex review of PR #86, P1):
@@ -3145,17 +3160,37 @@ Required behaviour:
   the message via `event.barSnapshot()`, which is what let a note in the sample
   correctly compare the raw close against the HA close.
 
-- **Missing triggering bar.** Under `SNAPSHOT_ONLY` retention a retried alert's
-  bar may already be deleted. `HeerwischChartRenderer.fetchLookback` repairs that
-  from `event.barSnapshot()` so the chart still contains the triggering candle;
-  the context MUST apply the same repair through a shared helper, or the chart and
-  the note would disagree about whether the alert bar exists (Codex P2).
+- **Missing triggering bar (pattern flow).** Under `SNAPSHOT_ONLY` retention a
+  retried alert's bar may already be deleted. `HeerwischChartRenderer.fetchLookback`
+  repairs that from `event.barSnapshot()` so the chart still contains the triggering
+  candle; the context MUST apply the same repair through a shared helper
+  (`HaLookbackWindow`), or the chart and the note would disagree about whether the
+  alert bar exists (Codex P2).
 
-- **Strategy window.** The strategy flow loads the same raw window the evaluator
-  and chart use (`OhlcRepository.findLastN`, `STRATEGY_LOOKBACK_BARS`) so
-  long-period indicators are warm, but **displays** only the trailing
-  `lookback-bars` rows. Indicator values are computed over the full loaded window;
-  only the printed table is truncated, and it says how many bars it is showing.
+- **Strategy flow: the caller passes the bar window; the analyst MUST NOT re-query
+  it.** A fresh repository read is *not* equivalent to the list the chart was drawn
+  from, because two repairs are applied upstream and neither is reproducible by
+  reading again (Codex P2):
+  - `MonitoringRunService` merges the freshly-ingested bars over the repository read
+    (`PatternDetectionService.mergedByBarTime`) because the read can lag its own
+    write. Under a lagging read, **only** the merged list contains the trigger bar —
+    which is precisely why the merge exists on the chart path.
+  - `StrategyRetryPollerService.withTriggerBar` splices the queued snapshot back in
+    when retention evicted the trigger bar before the retry ran.
+
+  The bar window therefore travels as a parameter on the `AiAnalyst` strategy
+  overloads, alongside the `Strategy`, for exactly the reason the `Strategy` does:
+  the note must describe the artefact the reader was actually sent, and re-deriving
+  either one re-opens the divergence instead of narrowing it.
+  `TechnicalContextBuilder` consequently holds **no** `OhlcRepository` — for the
+  strategy flow it is a pure function of what it is handed. A pleasant consequence:
+  the window feeding the indicators is the same `bars.size()` the chart's skip rule
+  was evaluated against, so rule 1 above cannot disagree between the two either.
+
+  Indicator values are computed over the **whole** passed window (so long-period
+  indicators are warm — the chart path loads 300 bars for this reason), while only
+  the trailing `lookback-bars` rows are **displayed**, and the block states how many
+  bars it is showing.
 - **Indicator values**: for each resolved indicator, its value at the alert bar
   plus its path over the window (so direction and level are both readable — the
   RSI-never-cited gap above is a level+direction gap).
@@ -3376,6 +3411,19 @@ Scenario: Indicator values are computed on the HA close, matching the drawn over
   And the HA closes differ from the raw closes over the window
   When the AI analyst builds the user message
   Then the SMA(10) value equals the mean of the last 10 HA closes
+
+Scenario: The strategy note describes the bar window the caller charted, not a re-read
+  Given a strategy alert whose trigger bar is absent from the repository
+  And the caller passes a bar window that contains the trigger bar
+  When the AI analyst builds the user message
+  Then the message contains the trigger bar
+  And the repository is never queried for bars
+
+Scenario: Indicators beyond the chart's eight subplot slots are not described
+  Given a strategy referencing nine distinct oscillator periods
+  When the AI analyst builds the user message
+  Then the message describes the eight the chart draws
+  And it does not describe the ninth
 ```
 
 Volume is **not** carried: `HABar` has no volume field, and the window is the HA
@@ -3402,8 +3450,15 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
   into a shared helper so the renderer and the prompt builder call the same code.
   Pure refactor — the resolved list, pane placement, dedup, the period-exceeds-window
   skip, and the rendered output are all unchanged.
+- `StrategyChartSpec` + `HeerwischChartRenderer`: their two copies of the identical
+  placement loop (dedup, window skip, eight subplot slots) collapse into the shared
+  `ChartIndicatorPlacement`. Pure refactor on both — same drawn set, same panes,
+  same order, same image — undertaken because the context builder is now a third
+  consumer and three copies of a rule is three chances to drift.
 - A new `TechnicalContextBuilder` (`infrastructure`), owning `HaRepository`,
-  `ChartConfig`, the shared resolver and `BarIndicatorSource`.
+  `ChartConfig`, the shared resolver and `BarIndicatorSource`. It owns **no**
+  `OhlcRepository` and **no** `StrategyRepository`: for the strategy flow both the
+  strategy and the bar window arrive as parameters.
 - `BedrockAiAnalyst`: constructor gains the builder; both `buildUserMessage`
   overloads emit the context block.
 - `NewsAggregator`, `EodhdNewsProvider`, `MarketauxNewsProvider`: per Part B.
@@ -3417,10 +3472,19 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
   holds, and `StrategyRetryPollerService` hoists its single lookup so the chart and
   the note are drawn from the *same* `Strategy` object.
 
-  **Invariant established:** the note describes the strategy the chart was rendered
-  from, because it is the same instance — not a second lookup that happens to
-  agree. `TechnicalContextBuilder` therefore holds no `StrategyRepository` at all,
-  which removes the race rather than narrowing it.
+  A second Codex pass extended the same argument to the **bar window**: the chart is
+  drawn from a repaired list (fresh-bar merge on the main path, trigger-bar splice on
+  retry) that a re-read cannot reproduce. So the strategy overloads carry
+  `List<OHLCBar>` too, and both call sites hand over the list they already hold —
+  `StrategyRetryPollerService` hoisting it out of `reRenderChart` for the same reason
+  it hoisted the strategy lookup.
+
+  **Invariant established:** the note describes the strategy *and* the series the
+  chart was rendered from, because they are the same objects — not second derivations
+  that happen to agree. `TechnicalContextBuilder` therefore holds neither a
+  `StrategyRepository` nor an `OhlcRepository`, which removes both races rather than
+  narrowing them. Stated as a rule for future readers: **anything the note describes
+  about a rendered artefact is passed in, never looked up.**
 
   The no-strategy overload is retained for the genuinely degraded retry case (the
   strategy was deleted since detection, which already forces a chart-degraded
