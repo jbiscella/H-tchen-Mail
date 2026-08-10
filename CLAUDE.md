@@ -3172,16 +3172,6 @@ Required behaviour:
 - **Both flows.** `buildUserMessage(StrategyAlert)` gains the same context block.
   It currently sends no bar values whatsoever, so it is the larger relative gain;
   a strategy alert must not remain the weaker of the two.
-- **Units.** *Specified but NOT delivered in this increment.* The intent was to
-  state the instrument currency (`Instrument.currency`, optional) in the bar
-  block, because nothing in the message declares the unit today — an observed
-  risk, since `GAW.LSE` quotes in pence and a note silently converted to pounds.
-  It is deferred because neither `PatternEvent` nor `StrategyAlert` carries the
-  currency, so it needs a third repository (`InstrumentRepository`) injected into
-  `TechnicalContextBuilder` — outside the change boundary agreed for this block.
-  Carry it with the fundamentals-tools increment, where `get_quote_info` would
-  supply the currency anyway.
-
 *Rationale for numbers over the PNG*: the sample shows the model reasoning
 precisely from exact figures, and reading levels off a raster introduces
 estimation error on exactly the values that matter (round-number resistance, MA
@@ -3355,7 +3345,6 @@ Scenario: The pattern-alert user message carries the chart's lookback series
   When the AI analyst builds the user message
   Then the message contains 30 HA bars with ha_open/ha_high/ha_low/ha_close and colour
   And the message still carries the alert bar's raw OHLC from the event snapshot
-  And the message states the instrument currency when configured
 
 Scenario: The serialized indicators match the chart's resolved indicator set
   Given the chart config has sma-period 10, ema-period 20 and show-rsi true
