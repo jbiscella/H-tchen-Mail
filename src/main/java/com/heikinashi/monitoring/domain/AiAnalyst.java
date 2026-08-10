@@ -39,6 +39,5 @@ public interface AiAnalyst {
      * the bar series with no indicator values, since the indicator set is a property
      * of the strategy. {@code Optional} is deliberately not used as a parameter (§13).
      */
-    AiAnalysis analyze(
-            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert, java.util.List<OHLCBar> bars);
+    AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert, java.util.List<OHLCBar> bars);
 }

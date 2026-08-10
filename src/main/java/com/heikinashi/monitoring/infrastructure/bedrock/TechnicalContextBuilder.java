@@ -132,9 +132,7 @@ public class TechnicalContextBuilder {
     }
 
     private String strategyContext(
-            StrategyAlert alert,
-            List<Indicator> indicators,
-            List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+            StrategyAlert alert, List<Indicator> indicators, List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         if (bars.isEmpty()) {
             return "";
         }

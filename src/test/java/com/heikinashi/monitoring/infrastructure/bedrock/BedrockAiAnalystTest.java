@@ -294,8 +294,7 @@ class BedrockAiAnalystTest {
         HaRepository failing = Mockito.mock(HaRepository.class);
         when(failing.findLastNBefore(any(), any(), any(), Mockito.anyInt()))
                 .thenThrow(new IllegalStateException("repository down"));
-        TechnicalContextBuilder exploding =
-                new TechnicalContextBuilder(failing, chartConfig());
+        TechnicalContextBuilder exploding = new TechnicalContextBuilder(failing, chartConfig());
 
         AiAnalysis result = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), exploding)
                 .analyze(EVENT);
@@ -332,8 +331,7 @@ class BedrockAiAnalystTest {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
         new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
         // Empty HA repository = retention removed everything, including the alert bar.
-        TechnicalContextBuilder context =
-                new TechnicalContextBuilder(new InMemoryHaRepository(), chartConfig());
+        TechnicalContextBuilder context = new TechnicalContextBuilder(new InMemoryHaRepository(), chartConfig());
 
         new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context).analyze(EVENT);
 
