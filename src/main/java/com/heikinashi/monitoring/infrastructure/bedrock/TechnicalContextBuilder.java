@@ -11,6 +11,7 @@ import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import com.heikinashi.monitoring.infrastructure.chart.ConfiguredChartIndicators;
 import com.heikinashi.monitoring.infrastructure.chart.HaLookbackWindow;
 import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
+import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -265,13 +266,15 @@ public class TechnicalContextBuilder {
         return out;
     }
 
-    /** The raw window as commons bars, matching the strategy chart's {@code PriceSource.CLOSE}. */
+    /**
+     * The raw window as commons bars, matching the strategy chart's
+     * {@code PriceSource.CLOSE}. Routed through {@link CommonsBarAdapter} — the single
+     * domain&lt;-&gt;commons boundary (Block 11) — rather than converting inline: the
+     * hand-rolled version this replaces also dropped {@code volume}, which the adapter
+     * passes through and a volume-based indicator would need.
+     */
     private static List<OHLCBar> toRawBars(List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
-        List<OHLCBar> out = new ArrayList<>(bars.size());
-        for (com.heikinashi.monitoring.domain.OHLCBar bar : bars) {
-            out.add(new OHLCBar(bar.barTime(), bar.open(), bar.high(), bar.low(), bar.close(), Optional.empty()));
-        }
-        return out;
+        return bars.stream().map(CommonsBarAdapter::toCommons).toList();
     }
 
     /**
