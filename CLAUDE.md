@@ -3182,11 +3182,15 @@ operator-entered, and unreliable across exchanges, ADRs and localized names.
 1. **Push relevance to the provider (query-side entity scoping).** Each adapter
    asks its provider to resolve the symbol as an *entity* rather than accepting
    loose tag matches. Generic per provider, zero curation:
-   - **Marketaux**: add `must_have_entities=true` and `filter_entities=true` to
-     the existing `/v1/news/all?symbols=…&published_after=…` query, so only
-     articles where the requested symbol is an identified entity are returned.
-     (Marketaux tracks entities across its source set and links each article to
-     its entities; both parameters are documented API features.)
+   - **Marketaux**: add `must_have_entities=true` to the existing
+     `/v1/news/all?symbols=…&published_after=…` query, so only articles where the
+     requested symbol is an identified entity are returned. (Marketaux tracks
+     entities across its source set and links each article to its entities.)
+     `filter_entities` is deliberately **not** sent: it trims each hit's returned
+     entity array to the requested symbol, which would make every item look
+     single-entity and silently disable the step-3 cardinality filter for this
+     provider. Leaving it off keeps the full array available to count. (Settles
+     this block's implementation decision 3.)
    - **EODHD**: the query is already symbol-scoped (`s={SYMBOL}` plus `from`/`to`).
    - **Yahoo RSS**: already a per-ticker feed; nothing to scope.
 2. **Over-fetch.** Each provider is asked for `monitoring.news.candidate-pool`
@@ -3275,7 +3279,7 @@ Scenario: The Marketaux query requests entity-resolved articles only
   Given the enabled news providers are "marketaux"
   When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
   Then the Marketaux provider was queried with must_have_entities true
-  And the Marketaux provider was queried with filter_entities true
+  And the Marketaux provider was not queried with filter_entities
 
 Scenario: An item outside the recency window is dropped even from a provider with no date filter
   Given the enabled news providers are "yahoo-rss"
@@ -3414,11 +3418,10 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
    run so the value can be tuned on evidence rather than guessed twice.
 2. Whether the global promotional-pattern list ships with a seed set derived from
    the 15-email sample, or starts empty and is populated operationally.
-3. Whether `filter_entities=true` (which trims the returned entity array to the
-   requested symbol) interferes with the step-3 cardinality count on Marketaux —
-   if it does, the cardinality filter must read the pre-trim list, or rely on
-   `must_have_entities` alone for that provider. Verify against a live response
-   before implementing.
+3. ~~Whether `filter_entities=true` interferes with the step-3 cardinality
+   count~~ — **SETTLED**: it does, by definition (it trims each hit's entity array
+   to the requested symbol). Only `must_have_entities=true` is sent; see Part B
+   step 1.
 
 **Queued decisions (deliberately NOT in this increment)**: the five unimplemented
 fundamentals tools; multimodal chart image; per-alert id; instrumented

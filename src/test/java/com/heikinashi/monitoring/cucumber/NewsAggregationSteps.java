@@ -60,6 +60,19 @@ public class NewsAggregationSteps {
     private Timeframe timeframe = Timeframe.D1;
     private String lastEodhdContent;
 
+    // Block 18 — titles of the items scripted below the entity-cardinality ceiling,
+    // so a scenario can assert that only those survived the filter.
+    private final java.util.Set<String> lowCardinalityTitles = new java.util.HashSet<>();
+
+    /**
+     * The aggregator under test. Block 18 gave it a recency source and a clock so it can
+     * enforce the date window centrally — including for providers whose own feed has no
+     * date filter.
+     */
+    private NewsAggregator aggregator() {
+        return new NewsAggregator(providers, config, recencySource, FIXED_CLOCK);
+    }
+
     @Given("a news provider {string} returning:")
     public void a_news_provider_returning(String name, DataTable table) {
         List<NewsHeadline> headlines = new ArrayList<>();
@@ -86,7 +99,7 @@ public class NewsAggregationSteps {
 
     @When("I aggregate news with max {int}")
     public void i_aggregate_news_with_max(int max) {
-        result = new NewsAggregator(providers, config).fetchNewsHeadlines("CFR", "SWX", max, Timeframe.D1);
+        result = aggregator().fetchNewsHeadlines("CFR", "SWX", max, Timeframe.D1);
     }
 
     @Then("the aggregated headlines are {string}")
@@ -197,7 +210,7 @@ public class NewsAggregationSteps {
     @When("I fetch news headlines for {string} on {string} with max {int}")
     public void i_fetch_news_headlines(String ticker, String exchange, int max) {
         providers.add(eodhdProvider());
-        result = new NewsAggregator(providers, config).fetchNewsHeadlines(ticker, exchange, max, timeframe);
+        result = aggregator().fetchNewsHeadlines(ticker, exchange, max, timeframe);
     }
 
     @Then("{int} headlines are returned")
@@ -293,6 +306,81 @@ public class NewsAggregationSteps {
     }
 
     // ------------------------------------------------------------------
+    // Block 18 — candidate pool: scope, over-fetch, filter, then cap
+    // ------------------------------------------------------------------
+
+    @Given("the candidate pool size is {int}")
+    public void the_candidate_pool_size_is(int size) {
+        config.setCandidatePool(size);
+    }
+
+    @Given("the maximum entities per item is {int}")
+    public void the_maximum_entities_per_item_is(int max) {
+        config.setMaxEntitiesPerItem(max);
+    }
+
+    @Given(
+            "the EODHD provider holds {int} items within the recency window where {int} carry {int} symbols and the rest carry {int}")
+    public void eodhd_holds_items_with_mixed_cardinality(int total, int lowCount, int lowSymbols, int highSymbols) {
+        // The digests are deliberately the NEWEST items and the single-company ones the
+        // oldest. That reproduces the real failure mode this block exists to fix: the
+        // recency sort put incidentally-tagged digests at the top, and the pre-filter cap
+        // handed the model five of them. With equal timestamps the stable sort would keep
+        // the single-company items on top and the assertion would pass even with the
+        // cardinality filter disabled — dead coverage.
+        Instant newest = Instant.parse("2026-06-11T10:00:00Z");
+        int highCount = total - lowCount;
+        for (int i = 0; i < total; i++) {
+            boolean low = i >= highCount;
+            String title = (low ? "single-company " : "digest ") + i;
+            if (low) {
+                lowCardinalityTitles.add(title);
+            }
+            ObjectNode node =
+                    item(newest.minus(java.time.Duration.ofMinutes(i)).toString(), title, linkFor(), "short content");
+            node.set("symbols", symbolArray(low ? lowSymbols : highSymbols));
+            eodhdItems.add(node);
+        }
+    }
+
+    @Given("the EODHD provider returns an item titled {string} carrying {int} symbol(s)")
+    public void eodhd_returns_an_item_with_n_symbols(String title, int symbols) {
+        ObjectNode node = item("2026-06-11T10:00:00Z", title, linkFor(), "short content");
+        node.set("symbols", symbolArray(symbols));
+        eodhdItems.add(node);
+    }
+
+    @Given("the EODHD provider returns an item with no symbol list published {int} days before now")
+    public void eodhd_returns_an_item_without_symbols(int daysAgo) {
+        Instant published = FIXED_CLOCK.instant().minus(java.time.Duration.ofDays(daysAgo));
+        eodhdItems.add(item(published.toString(), "no symbol list", linkFor(), "short content"));
+    }
+
+    @Then("the EODHD provider was queried for {int} items")
+    public void the_eodhd_provider_was_queried_for_n_items(int limit) {
+        assertThat(eodhdQueries).hasSize(1);
+        assertThat(queryParams(eodhdQueries.get(0))).containsEntry("limit", String.valueOf(limit));
+    }
+
+    @Then("every returned headline is one of the low-cardinality items")
+    public void every_returned_headline_is_low_cardinality() {
+        assertThat(result).extracting(NewsHeadline::title).allMatch(lowCardinalityTitles::contains);
+    }
+
+    // There is deliberately no "no error is raised" step here: InstrumentRegistrySteps
+    // already owns that phrase against its own World, and reusing it from a news
+    // scenario would assert an exception slot these steps never write — vacuous
+    // coverage. "0 headlines are returned" already proves the call returned normally.
+
+    private static com.fasterxml.jackson.databind.node.ArrayNode symbolArray(int count) {
+        com.fasterxml.jackson.databind.node.ArrayNode arr = JSON.createArrayNode();
+        for (int i = 0; i < count; i++) {
+            arr.add("SYM" + i);
+        }
+        return arr;
+    }
+
+    // ------------------------------------------------------------------
     // Block 17 helpers
     // ------------------------------------------------------------------
 
@@ -308,7 +396,13 @@ public class NewsAggregationSteps {
                     200, JSON.createArrayNode().addAll(eodhdItems).toString());
         };
         return new EodhdNewsProvider(
-                eodhdConfig, eodhdNewsConfig, Map.of("NASDAQ", ".US", "MIL", ".MI"), recencySource, FIXED_CLOCK, http);
+                eodhdConfig,
+                eodhdNewsConfig,
+                config,
+                Map.of("NASDAQ", ".US", "MIL", ".MI"),
+                recencySource,
+                FIXED_CLOCK,
+                http);
     }
 
     private static ObjectNode item(String date, String title, String link, String content) {

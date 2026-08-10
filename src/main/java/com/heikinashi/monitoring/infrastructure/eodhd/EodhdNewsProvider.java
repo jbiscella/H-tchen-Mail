@@ -6,6 +6,7 @@ import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.ProviderUnavailableException;
 import com.heikinashi.monitoring.domain.error.SchemaDriftException;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
+import com.heikinashi.monitoring.infrastructure.news.NewsConfig;
 import com.heikinashi.monitoring.infrastructure.news.NewsProvider;
 import com.heikinashi.monitoring.infrastructure.news.NewsSymbols;
 import com.heikinashi.monitoring.infrastructure.news.RecencyWindowSource;
@@ -65,6 +66,7 @@ public class EodhdNewsProvider implements NewsProvider {
 
     private final EodhdConfig config;
     private final EodhdNewsConfig newsConfig;
+    private final NewsConfig sharedNewsConfig;
     private final Map<String, String> suffixMap;
     private final RecencyWindowSource recency;
     private final Clock clock;
@@ -73,22 +75,32 @@ public class EodhdNewsProvider implements NewsProvider {
     public EodhdNewsProvider(
             EodhdConfig config,
             EodhdNewsConfig newsConfig,
+            NewsConfig sharedNewsConfig,
             @Value("${monitoring.exchanges.suffix-map:{}}") String suffixMapJson,
             RecencyWindowSource recency,
             Clock clock) {
-        this(config, newsConfig, NewsSymbols.parseSuffixMap(suffixMapJson), recency, clock, jdkHttp(config));
+        this(
+                config,
+                newsConfig,
+                sharedNewsConfig,
+                NewsSymbols.parseSuffixMap(suffixMapJson),
+                recency,
+                clock,
+                jdkHttp(config));
     }
 
     /** Test seam: script the HTTP exchange without touching the network. */
     public EodhdNewsProvider(
             EodhdConfig config,
             EodhdNewsConfig newsConfig,
+            NewsConfig sharedNewsConfig,
             Map<String, String> suffixMap,
             RecencyWindowSource recency,
             Clock clock,
             HttpExchange http) {
         this.config = config;
         this.newsConfig = newsConfig;
+        this.sharedNewsConfig = sharedNewsConfig;
         this.suffixMap = Map.copyOf(suffixMap);
         this.recency = recency;
         this.clock = clock;
@@ -152,16 +164,26 @@ public class EodhdNewsProvider implements NewsProvider {
             throw new ProviderUnavailableException(PROVIDER, new RuntimeException("unexpected status: " + status));
         }
 
-        List<NewsHeadline> headlines = parseNews(response.body(), max, newsConfig.getSummaryMaxChars());
+        int maxEntities = sharedNewsConfig.getMaxEntitiesPerItem();
+        ParseResult parsed = parseNews(response.body(), max, newsConfig.getSummaryMaxChars(), maxEntities);
         LOG.info(
-                "news_call provider={} symbol={} status={} duration_ms={} count={}",
+                "news_call provider={} symbol={} status={} duration_ms={} count={} dropped_multi_entity={} max_entities={}",
                 PROVIDER,
                 symbol,
                 status,
                 elapsed,
-                headlines.size());
-        return headlines;
+                parsed.headlines().size(),
+                parsed.droppedMultiEntity(),
+                maxEntities);
+        return parsed.headlines();
     }
+
+    /**
+     * Parsed headlines plus how many items the entity-cardinality rule dropped. The
+     * count is logged rather than discarded: {@code max-entities-per-item} is a
+     * starting estimate, so the drop rate is the evidence for tuning it.
+     */
+    record ParseResult(List<NewsHeadline> headlines, int droppedMultiEntity) {}
 
     private URI buildUri(String symbol, int max, LocalDate from, LocalDate to) {
         return URI.create(config.getBaseUrl() + "/news?s="
@@ -178,7 +200,7 @@ public class EodhdNewsProvider implements NewsProvider {
      * Instant UTC, {@code link} → url verbatim + host-derived source,
      * {@code content} → word-boundary-truncated summary (absent → empty).
      */
-    static List<NewsHeadline> parseNews(String body, int max, int summaryMaxChars) {
+    static ParseResult parseNews(String body, int max, int summaryMaxChars, int maxEntities) {
         JsonNode root;
         try {
             root = JSON.readTree(body);
@@ -189,12 +211,21 @@ public class EodhdNewsProvider implements NewsProvider {
             throw new SchemaDriftException("eodhd.news", "expected a JSON array of news items");
         }
         List<NewsHeadline> out = new ArrayList<>();
+        int droppedMultiEntity = 0;
         for (JsonNode article : root) {
             if (out.size() >= max) {
                 break;
             }
             if (!article.hasNonNull("title") || !article.hasNonNull("date") || !article.hasNonNull("link")) {
                 LOG.debug("eodhd_skipping_article reason=missing_field");
+                continue;
+            }
+            // Block 18 step 3: a multi-company digest is dropped on entity cardinality
+            // alone — no knowledge of which company the alert concerns. Checked before
+            // the item can consume a slot in the candidate pool.
+            if (symbolCount(article) > maxEntities) {
+                droppedMultiEntity++;
+                LOG.debug("eodhd_skipping_article reason=multi_entity_digest symbols={}", symbolCount(article));
                 continue;
             }
             try {
@@ -213,7 +244,18 @@ public class EodhdNewsProvider implements NewsProvider {
                 LOG.debug("eodhd_skipping_article reason=unparsable date");
             }
         }
-        return out;
+        return new ParseResult(out, droppedMultiEntity);
+    }
+
+    /**
+     * How many symbols EODHD tagged an item with. An absent or non-array
+     * {@code symbols} field counts as 0, so an item carrying no entity list is never
+     * dropped by the cardinality rule — the signal is optional by design and a
+     * provider that omits it must not be penalized.
+     */
+    static int symbolCount(JsonNode article) {
+        JsonNode symbols = article.get("symbols");
+        return symbols != null && symbols.isArray() ? symbols.size() : 0;
     }
 
     /** The {@code source} EODHD does not supply: the link's host, or empty on a malformed link — never a failure. */
