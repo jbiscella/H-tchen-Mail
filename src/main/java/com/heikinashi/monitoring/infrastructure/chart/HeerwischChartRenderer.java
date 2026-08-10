@@ -8,13 +8,11 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import org.hatrack.commons.PriceSource;
 import org.hatrack.heerwisch.api.error.DriverInternalException;
@@ -130,21 +128,9 @@ public class HeerwischChartRenderer implements ChartRenderer {
      * V6, and a short bootstrap chart should still render with fewer overlays).
      */
     private void addIndicators(ChartSpecBuilder builder, int bars) {
-        List<Indicator> indicators = new ArrayList<>();
-        if (config.getSmaPeriod() > 0) {
-            indicators.add(new Indicator.SMA(config.getSmaPeriod(), SOURCE));
-        }
-        if (config.getEmaPeriod() > 0) {
-            indicators.add(new Indicator.EMA(config.getEmaPeriod(), SOURCE));
-        }
-        if (config.isShowRsi()) {
-            indicators.add(new Indicator.RSI(
-                    config.getRsiPeriod(),
-                    new BigDecimal("70"),
-                    new BigDecimal("30"),
-                    SOURCE,
-                    Optional.of(Indicator.RsiVisualization.DANGER_ZONES_ON)));
-        }
+        // Resolved through the shared helper so the AI analyst's technical-context block
+        // (Block 18) describes exactly the overlays drawn here — one source of truth.
+        List<Indicator> indicators = ConfiguredChartIndicators.derive(config);
 
         Pane[] subPanes = {
             Pane.SUBPLOT_1, Pane.SUBPLOT_2, Pane.SUBPLOT_3, Pane.SUBPLOT_4,

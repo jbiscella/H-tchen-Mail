@@ -3151,9 +3151,15 @@ Required behaviour:
 - **Both flows.** `buildUserMessage(StrategyAlert)` gains the same context block.
   It currently sends no bar values whatsoever, so it is the larger relative gain;
   a strategy alert must not remain the weaker of the two.
-- **Units.** The bar block states the instrument currency (`Instrument.currency`,
-  optional) when known. Observed risk: `GAW.LSE` quotes in pence and a note
-  silently converted to pounds; nothing in the message declares the unit.
+- **Units.** *Specified but NOT delivered in this increment.* The intent was to
+  state the instrument currency (`Instrument.currency`, optional) in the bar
+  block, because nothing in the message declares the unit today — an observed
+  risk, since `GAW.LSE` quotes in pence and a note silently converted to pounds.
+  It is deferred because neither `PatternEvent` nor `StrategyAlert` carries the
+  currency, so it needs a third repository (`InstrumentRepository`) injected into
+  `TechnicalContextBuilder` — outside the change boundary agreed for this block.
+  Carry it with the fundamentals-tools increment, where `get_quote_info` would
+  supply the currency anyway.
 
 *Rationale for numbers over the PNG*: the sample shows the model reasoning
 precisely from exact figures, and reading levels off a raster introduces

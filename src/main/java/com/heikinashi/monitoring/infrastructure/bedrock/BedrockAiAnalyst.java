@@ -107,11 +107,17 @@ public class BedrockAiAnalyst implements AiAnalyst {
     private final BedrockRuntimeClient client;
     private final BedrockConfig config;
     private final MarketDataProvider provider;
+    private final TechnicalContextBuilder technicalContext;
 
-    public BedrockAiAnalyst(BedrockRuntimeClient client, BedrockConfig config, MarketDataProvider provider) {
+    public BedrockAiAnalyst(
+            BedrockRuntimeClient client,
+            BedrockConfig config,
+            MarketDataProvider provider,
+            TechnicalContextBuilder technicalContext) {
         this.client = client;
         this.config = config;
         this.provider = provider;
+        this.technicalContext = technicalContext;
     }
 
     @Override
@@ -200,6 +206,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 + ", high=" + event.barSnapshot().high()
                 + ", low=" + event.barSnapshot().low()
                 + ", close=" + event.barSnapshot().close() + "\n"
+                + technicalContextOf(() -> technicalContext.forPatternEvent(event))
                 + "Decide which tools to call, then write the note as JSON only.";
         return Message.builder()
                 .role(ConversationRole.USER)
@@ -232,11 +239,27 @@ public class BedrockAiAnalyst implements AiAnalyst {
                     .append(line.role())
                     .append("]\n");
         }
+        sb.append(technicalContextOf(() -> technicalContext.forStrategyAlert(alert)));
         sb.append("Decide which tools to call, then write the note as JSON only.");
         return Message.builder()
                 .role(ConversationRole.USER)
                 .content(ContentBlock.fromText(sb.toString()))
                 .build();
+    }
+
+    /**
+     * The Block 18 technical-context block, or nothing if it cannot be built. The AI note
+     * is best-effort enrichment on an alert the user still needs: a repository hiccup while
+     * loading the chart's lookback must degrade the note's context, never cost the email.
+     */
+    private String technicalContextOf(java.util.function.Supplier<String> supplier) {
+        try {
+            String block = supplier.get();
+            return block.isEmpty() ? "" : block + "\n";
+        } catch (RuntimeException e) {
+            LOG.warn("technical_context_unavailable error={}", e.toString());
+            return "";
+        }
     }
 
     private Message buildToolResultsMessage(Message assistant, ToolCatalog catalog) {
