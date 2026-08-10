@@ -3191,6 +3191,12 @@ Required behaviour:
   indicators are warm — the chart path loads 300 bars for this reason), while only
   the trailing `lookback-bars` rows are **displayed**, and the block states how many
   bars it is showing.
+
+  Note what is and is not *testable* here: with the repository removed from the
+  class, "does not re-read" is not an observable behaviour but a structural property
+  — there is no collaborator left to query. The AAA test therefore asserts the
+  positive (the passed window is the described window) rather than a negative it
+  cannot see, and the structure is what prevents the regression.
 - **Indicator values**: for each resolved indicator, its value at the alert bar
   plus its path over the window (so direction and level are both readable — the
   RSI-never-cited gap above is a level+direction gap).
@@ -3413,11 +3419,10 @@ Scenario: Indicator values are computed on the HA close, matching the drawn over
   Then the SMA(10) value equals the mean of the last 10 HA closes
 
 Scenario: The strategy note describes the bar window the caller charted, not a re-read
-  Given a strategy alert whose trigger bar is absent from the repository
-  And the caller passes a bar window that contains the trigger bar
+  Given the caller passes a 3-bar window ending at the alert bar
   When the AI analyst builds the user message
-  Then the message contains the trigger bar
-  And the repository is never queried for bars
+  Then the message reports 3 raw OHLC bars
+  And the message contains the alert bar's timestamp
 
 Scenario: Indicators beyond the chart's eight subplot slots are not described
   Given a strategy referencing nine distinct oscillator periods

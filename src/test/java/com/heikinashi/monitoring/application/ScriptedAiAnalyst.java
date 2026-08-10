@@ -34,14 +34,17 @@ public final class ScriptedAiAnalyst implements AiAnalyst {
     @Override
     public AiAnalysis analyze(
             com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
-            com.heikinashi.monitoring.domain.strategy.Strategy strategy) {
-        // Block 18: callers pass the strategy the chart was drawn from; the scripted
-        // double answers identically either way.
-        return analyze(alert);
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        // Block 18: callers pass the strategy and the bar window the chart was drawn from;
+        // the scripted double answers identically either way.
+        return nextAnalysis();
     }
 
     @Override
-    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         return nextAnalysis();
     }
 

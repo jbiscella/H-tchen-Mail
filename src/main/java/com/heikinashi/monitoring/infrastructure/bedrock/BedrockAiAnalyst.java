@@ -134,10 +134,11 @@ public class BedrockAiAnalyst implements AiAnalyst {
     @Override
     public AiAnalysis analyze(
             com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
-            com.heikinashi.monitoring.domain.strategy.Strategy strategy) {
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         try {
             return runLoop(
-                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, strategy)),
+                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, strategy, bars)),
                     alert.timeframe());
         } catch (LLMException e) {
             throw e;
@@ -147,9 +148,12 @@ public class BedrockAiAnalyst implements AiAnalyst {
     }
 
     @Override
-    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         try {
-            return runLoop(buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert)), alert.timeframe());
+            return runLoop(
+                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, bars)), alert.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {

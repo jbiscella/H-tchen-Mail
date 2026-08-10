@@ -150,14 +150,19 @@ public class StrategyRetryPollerService {
                     alert.instrumentId(),
                     alert.barTime());
         }
-        Optional<ChartImage> chart = strategy.flatMap(s -> reRenderChart(claimed, s));
+        // One bar window, shared by the chart and the note, for the same reason the strategy
+        // lookup above is shared: the trigger-bar repair below is not reproducible by a
+        // second read, so re-reading for the note could describe a series missing the very
+        // candle the chart marks (Block 18 / Codex review of PR #86).
+        List<OHLCBar> bars = lookbackWindow(claimed);
+        Optional<ChartImage> chart = strategy.flatMap(s -> reRenderChart(alert, s, bars));
 
         Optional<AiAnalysis> analysis;
         try {
             // Strategy gone => already chart-degraded; the note falls back to the bar series
             // with no indicators rather than inventing an indicator set.
-            analysis = Optional.of(
-                    strategy.map(s -> aiAnalyst.analyze(alert, s)).orElseGet(() -> aiAnalyst.analyze(alert)));
+            analysis = Optional.of(strategy.map(s -> aiAnalyst.analyze(alert, s, bars))
+                    .orElseGet(() -> aiAnalyst.analyze(alert, bars)));
         } catch (LLMException | DependencyUnavailableException e) {
             logRetryFailure(alert, "ai", e);
             analysis = Optional.empty();
@@ -176,19 +181,26 @@ public class StrategyRetryPollerService {
     }
 
     /**
-     * Re-render the chart from the persisted strategy + bars. Empty when the
-     * strategy was deleted since detection, or the render still fails (the send is
-     * then chart-degraded).
+     * The bar window for this retry: the persisted lookback with the triggering bar
+     * restored if retention evicted it. Resolved once per alert and shared by the chart
+     * and the AI note, so both describe the same series.
      */
-    private Optional<ChartImage> reRenderChart(PendingStrategyAlert pending, Strategy resolved) {
+    private List<OHLCBar> lookbackWindow(PendingStrategyAlert pending) {
         StrategyAlert alert = pending.alert();
-        Optional<Strategy> strategy = Optional.of(resolved);
-        List<OHLCBar> bars = withTriggerBar(
+        return withTriggerBar(
                 ohlcRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
                 alert.barTime(),
                 pending.triggerBar());
+    }
+
+    /**
+     * Re-render the chart from the persisted strategy + the shared bar window. Empty when
+     * the strategy was deleted since detection, or the render still fails (the send is
+     * then chart-degraded).
+     */
+    private Optional<ChartImage> reRenderChart(StrategyAlert alert, Strategy resolved, List<OHLCBar> bars) {
         try {
-            return Optional.of(chartRenderer.render(alert, strategy.get(), bars));
+            return Optional.of(chartRenderer.render(alert, resolved, bars));
         } catch (ChartRenderException | DependencyUnavailableException e) {
             logRetryFailure(alert, "chart", e);
             return Optional.empty();

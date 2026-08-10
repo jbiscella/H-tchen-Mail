@@ -8,9 +8,7 @@ import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import org.hatrack.commons.PriceSource;
 import org.hatrack.heerwisch.api.error.DriverInternalException;
 import org.hatrack.heerwisch.api.spec.Annotation;
@@ -107,21 +105,11 @@ public class HeerwischChartRenderer implements ChartRenderer {
         // (Block 18) describes exactly the overlays drawn here — one source of truth.
         List<Indicator> indicators = ConfiguredChartIndicators.derive(config);
 
-        Pane[] subPanes = {
-            Pane.SUBPLOT_1, Pane.SUBPLOT_2, Pane.SUBPLOT_3, Pane.SUBPLOT_4,
-            Pane.SUBPLOT_5, Pane.SUBPLOT_6, Pane.SUBPLOT_7, Pane.SUBPLOT_8
-        };
-        int subPaneIdx = 0;
-        Set<String> seen = new HashSet<>();
-        for (Indicator indicator : indicators) {
-            if (bars < indicator.minBars() || !seen.add(indicator.toString())) {
-                continue;
-            }
-            if (indicator.defaultPane() == Pane.MAIN) {
-                builder.addIndicator(indicator);
-            } else if (subPaneIdx < subPanes.length) {
-                builder.addIndicator(indicator, subPanes[subPaneIdx]);
-                subPaneIdx++;
+        for (ChartIndicatorPlacement.Placed p : ChartIndicatorPlacement.drawn(indicators, bars)) {
+            if (p.pane() == Pane.MAIN) {
+                builder.addIndicator(p.indicator());
+            } else {
+                builder.addIndicator(p.indicator(), p.pane());
             }
         }
     }

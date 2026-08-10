@@ -2,12 +2,12 @@ package com.heikinashi.monitoring.infrastructure.bedrock;
 
 import com.heikinashi.monitoring.domain.HABar;
 import com.heikinashi.monitoring.domain.HaRepository;
-import com.heikinashi.monitoring.domain.OhlcRepository;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
+import com.heikinashi.monitoring.infrastructure.chart.ChartIndicatorPlacement;
 import com.heikinashi.monitoring.infrastructure.chart.ConfiguredChartIndicators;
 import com.heikinashi.monitoring.infrastructure.chart.HaLookbackWindow;
 import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
@@ -45,18 +45,30 @@ import org.slf4j.LoggerFactory;
  *       pattern chart's {@link PriceSource#HA_CLOSE} overlays.</li>
  *   <li>{@link StrategyAlert} → <em>raw</em> OHLC. {@code StrategyChartSpec} builds a
  *       commons OHLC series and {@link StrategyChartIndicators} uses
- *       {@link PriceSource#CLOSE}, so the series is the {@code OHLCBar} window from
- *       {@link OhlcRepository#findLastN} and indicators evaluate on the raw close.</li>
+ *       {@link PriceSource#CLOSE}, so the series is the raw {@code OHLCBar} window the
+ *       caller charted and indicators evaluate on the raw close.</li>
  * </ul>
  *
  * Serving a strategy alert from the HA series would print values that disagree with both
  * the attached strategy chart and the DSL condition that fired the alert — the exact
  * failure this block exists to prevent.
  *
+ * <p><strong>Nothing about a rendered artefact is looked up here; it is passed in.</strong>
+ * The strategy flow receives both the {@link Strategy} and its bar window as parameters,
+ * so this class holds no {@code StrategyRepository} and no {@code OhlcRepository}. Two
+ * upstream repairs make a fresh read non-equivalent to what was drawn, and neither is
+ * reproducible by reading again: {@code MonitoringRunService} merges freshly-ingested bars
+ * over the repository read (which can lag its own write), and
+ * {@code StrategyRetryPollerService.withTriggerBar} splices back a trigger bar that
+ * retention evicted before the retry ran. Re-deriving either the strategy or the series
+ * would narrow those races rather than remove them.
+ *
  * <p>The indicator set is likewise resolved per flow through the same helper the
  * corresponding renderer uses ({@link ConfiguredChartIndicators} from
  * {@code monitoring.chart}, or {@link StrategyChartIndicators} from the strategy's
- * conditions), never hardcoded here.
+ * conditions), never hardcoded here, and then filtered through
+ * {@link ChartIndicatorPlacement} so only indicators the chart has room to draw are
+ * described.
  *
  * <p>Values come from {@code dsl-eval}'s {@link BarIndicatorSource}, already on the
  * classpath for strategy evaluation, so no new dependency.
@@ -69,21 +81,11 @@ public class TechnicalContextBuilder {
     /** How many trailing values of each indicator to show, so direction is readable, not just level. */
     private static final int PATH_POINTS = 5;
 
-    /**
-     * The raw window the strategy evaluator and strategy chart use
-     * ({@code PatternDetectionService.STRATEGY_LOOKBACK_BARS}). Indicators compute over all
-     * of it so long-period ones are warm; only the printed table is truncated to
-     * {@code lookback-bars}.
-     */
-    private static final int STRATEGY_LOOKBACK_BARS = 300;
-
     private final HaRepository haRepository;
-    private final OhlcRepository ohlcRepository;
     private final ChartConfig chartConfig;
 
-    public TechnicalContextBuilder(HaRepository haRepository, OhlcRepository ohlcRepository, ChartConfig chartConfig) {
+    public TechnicalContextBuilder(HaRepository haRepository, ChartConfig chartConfig) {
         this.haRepository = haRepository;
-        this.ohlcRepository = ohlcRepository;
         this.chartConfig = chartConfig;
     }
 
@@ -106,15 +108,18 @@ public class TechnicalContextBuilder {
 
     /**
      * Context for a strategy alert: raw OHLC series, raw-close basis, indicators derived
-     * from the strategy the <em>caller</em> rendered the chart from.
+     * from the strategy the <em>caller</em> rendered the chart from, over the <em>same</em>
+     * bar window it rendered from.
      *
-     * <p>The strategy is a parameter rather than a repository lookup on purpose. Looking it
-     * up here would let a re-import between dispatch and this call swap it, so the note
-     * could describe indicators the attached chart does not draw. Passing the same instance
-     * removes the race instead of narrowing it.
+     * <p>Both are parameters rather than repository lookups on purpose (see the class
+     * comment): a re-import could swap the strategy between dispatch and this call, and the
+     * caller's bar list carries repairs — a fresh-bar merge, or a spliced-in trigger bar —
+     * that a fresh read does not reproduce. Passing what was drawn removes both races
+     * instead of narrowing them.
      */
-    public String forStrategyAlert(StrategyAlert alert, Strategy strategy) {
-        return strategyContext(alert, StrategyChartIndicators.derive(strategy));
+    public String forStrategyAlert(
+            StrategyAlert alert, Strategy strategy, List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        return strategyContext(alert, StrategyChartIndicators.derive(strategy), bars);
     }
 
     /**
@@ -122,17 +127,20 @@ public class TechnicalContextBuilder {
      * chart-degraded. The series still carries useful price action; the indicator set is a
      * property of the strategy, so there is none to report.
      */
-    public String forStrategyAlert(StrategyAlert alert) {
-        return strategyContext(alert, List.of());
+    public String forStrategyAlert(StrategyAlert alert, List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        return strategyContext(alert, List.of(), bars);
     }
 
-    private String strategyContext(StrategyAlert alert, List<Indicator> indicators) {
-        List<com.heikinashi.monitoring.domain.OHLCBar> bars = ohlcRepository.findLastN(
-                alert.instrumentId(), alert.timeframe(), alert.barTime(), STRATEGY_LOOKBACK_BARS);
+    private String strategyContext(
+            StrategyAlert alert,
+            List<Indicator> indicators,
+            List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         if (bars.isEmpty()) {
             return "";
         }
-        // Compute over the whole loaded window (long periods need it); print only the tail.
+        // Compute over the whole passed window (long periods need it); print only the tail.
+        // The chart loads 300 bars for exactly this reason, and its own skip rule was
+        // evaluated against this same size — so the two cannot disagree about what is warm.
         int shown = Math.min(bars.size(), chartConfig.getLookbackBars());
         List<com.heikinashi.monitoring.domain.OHLCBar> tail = bars.subList(bars.size() - shown, bars.size());
         return render("raw OHLC bars", ohlcRows(tail), toRawBars(bars), indicators, alert.timeframe(), shown);
@@ -187,15 +195,22 @@ public class TechnicalContextBuilder {
     }
 
     private void appendIndicators(StringBuilder sb, List<OHLCBar> bars, List<Indicator> indicators) {
+        // Describe only what the chart draws, decided by the renderers' own placement rules
+        // via the shared helper: the window skip (heerwisch V6), dedup, and the eight
+        // subplot slots. Reimplementing any of them here is how the note ends up citing a
+        // pane the reader cannot see — the ninth oscillator has nowhere to be drawn.
+        List<Indicator> drawn = ChartIndicatorPlacement.drawn(indicators, bars.size()).stream()
+                .map(ChartIndicatorPlacement.Placed::indicator)
+                .toList();
+        if (drawn.size() < indicators.size()) {
+            LOG.debug(
+                    "technical_context_indicators_not_drawn resolved={} drawn={} bars={}",
+                    indicators.size(),
+                    drawn.size(),
+                    bars.size());
+        }
         List<String> lines = new ArrayList<>();
-        for (Indicator indicator : indicators) {
-            // Honour the renderers' skip rule: an indicator whose period exceeds the window
-            // is not drawn, so it must not be described either. Both renderers accept it when
-            // bars == minBars, so this comparison is strictly-less, matching them exactly.
-            if (bars.size() < indicator.minBars()) {
-                LOG.debug("technical_context_skipping_indicator reason=window_too_short indicator={}", indicator);
-                continue;
-            }
+        for (Indicator indicator : drawn) {
             for (DslCall call : dslCalls(indicator)) {
                 line(bars, call).ifPresent(lines::add);
             }

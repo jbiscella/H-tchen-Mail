@@ -34,11 +34,6 @@ import org.hatrack.heerwisch.api.spec.Pane;
  */
 public final class StrategyChartSpec {
 
-    private static final Pane[] SUB_PANES = {
-        Pane.SUBPLOT_1, Pane.SUBPLOT_2, Pane.SUBPLOT_3, Pane.SUBPLOT_4,
-        Pane.SUBPLOT_5, Pane.SUBPLOT_6, Pane.SUBPLOT_7, Pane.SUBPLOT_8
-    };
-
     private StrategyChartSpec() {}
 
     public static ChartSpec build(Strategy strategy, StrategyAlert alert, List<OHLCBar> bars, ChartConfig config) {
@@ -62,22 +57,17 @@ public final class StrategyChartSpec {
     /**
      * Each indicator goes to its {@code defaultPane()} (MAIN overlays in place;
      * oscillators cycle the subplot slots), de-duplicated, and any whose minimum
-     * window exceeds the available bars is skipped — the same placement loop the
-     * legacy {@link HeerwischChartRenderer} uses (heerwisch rejects over-long
-     * indicators with V6).
+     * window exceeds the available bars is skipped. The rules themselves live in
+     * {@link ChartIndicatorPlacement}, shared with the legacy
+     * {@link HeerwischChartRenderer} and with the AI analyst's technical-context
+     * block so all three agree on what is drawn (Block 18).
      */
     private static void placeIndicators(ChartSpecBuilder builder, List<Indicator> indicators, int bars) {
-        int subPaneIdx = 0;
-        Set<String> seen = new HashSet<>();
-        for (Indicator indicator : indicators) {
-            if (bars < indicator.minBars() || !seen.add(indicator.toString())) {
-                continue;
-            }
-            if (indicator.defaultPane() == Pane.MAIN) {
-                builder.addIndicator(indicator);
-            } else if (subPaneIdx < SUB_PANES.length) {
-                builder.addIndicator(indicator, SUB_PANES[subPaneIdx]);
-                subPaneIdx++;
+        for (ChartIndicatorPlacement.Placed p : ChartIndicatorPlacement.drawn(indicators, bars)) {
+            if (p.pane() == Pane.MAIN) {
+                builder.addIndicator(p.indicator());
+            } else {
+                builder.addIndicator(p.indicator(), p.pane());
             }
         }
     }

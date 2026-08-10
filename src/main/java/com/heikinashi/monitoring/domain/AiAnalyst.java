@@ -13,15 +13,25 @@ public interface AiAnalyst {
      * the matched scenarios / roles instead of a single pattern; the tool-use
      * loop and output schema are otherwise identical to {@link #analyze(PatternEvent)}.
      *
-     * <p>The caller passes the {@code Strategy} it rendered the attached chart from,
-     * so the note's technical context describes the same strategy the reader sees
-     * charted. Looking the strategy up again inside the analyst would allow a
-     * re-import between dispatch and this call to swap it (Block 18 / Codex review
-     * of PR #86).
+     * <p><b>The caller passes both artefacts it rendered the attached chart from</b> —
+     * the {@code Strategy} and the bar window — so the note's technical context
+     * describes what the reader is actually looking at. Re-deriving either inside the
+     * analyst reopens a divergence (Block 18 / Codex review of PR #86):
+     *
+     * <ul>
+     *   <li>a re-import between dispatch and this call can swap the strategy behind an
+     *       instrument id, so the note would list overlays the chart never drew;
+     *   <li>the bar list is <i>repaired</i> upstream in ways a fresh read cannot
+     *       reproduce — {@code MonitoringRunService} merges freshly-ingested bars over
+     *       a repository read that may lag its own write, and
+     *       {@code StrategyRetryPollerService} splices back a trigger bar that
+     *       retention evicted before the retry ran.
+     * </ul>
      */
     AiAnalysis analyze(
             com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
-            com.heikinashi.monitoring.domain.strategy.Strategy strategy);
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy,
+            java.util.List<OHLCBar> bars);
 
     /**
      * Degraded variant for the retry path when the strategy has been deleted since
@@ -29,5 +39,6 @@ public interface AiAnalyst {
      * the bar series with no indicator values, since the indicator set is a property
      * of the strategy. {@code Optional} is deliberately not used as a parameter (§13).
      */
-    AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert);
+    AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert, java.util.List<OHLCBar> bars);
 }
