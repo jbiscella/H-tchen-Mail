@@ -3373,9 +3373,30 @@ Part A.
 - No new per-instrument configuration of any kind. `Instrument.name` stays unused.
 - `monitoring.chart.*` is reused unchanged as the single source of the indicator
   set; **no new chart config keys**, and no chart-rendering behaviour changes.
-- No changes to `NewsHeadline`, provider enablement, dedup rules, `AlertEnrichment`,
-  or any dispatch/retry path. If implementation pressure suggests otherwise, stop
-  and report.
+**Change boundary.** Part A cannot be delivered without touching code outside the
+news layer, so the boundary is stated explicitly rather than left to judgment.
+
+*In bounds — this block changes these:*
+
+- `HeerwischChartRenderer`: the config-driven indicator resolution is **extracted**
+  into a shared helper so the renderer and the prompt builder call the same code.
+  Pure refactor — the resolved list, pane placement, dedup, the period-exceeds-window
+  skip, and the rendered output are all unchanged.
+- A new `TechnicalContextBuilder` (`infrastructure`), owning `HaRepository`,
+  `ChartConfig`, the shared resolver and `BarIndicatorSource`.
+- `BedrockAiAnalyst`: constructor gains the builder; both `buildUserMessage`
+  overloads emit the context block.
+- `NewsAggregator`, `EodhdNewsProvider`, `MarketauxNewsProvider`: per Part B.
+- `NewsConfig` plus the three new keys above.
+
+*Out of bounds — unchanged, and a reason to stop and report if pressure builds:*
+
+- The `ChartRenderer` and `AiAnalyst` **port signatures**, and every dispatch and
+  retry path (`AlertDispatchService`, `StrategyAlertDispatchService`,
+  `RetryPollerService`, `StrategyRetryPollerService`).
+- `NewsHeadline`, `HABar`, provider enablement, dedup rules, `AlertEnrichment`.
+- Chart rendering output — no visual change to the emailed image.
+- Any new Maven dependency.
 - Prompt-contract verification follows Block 17's precedent: `BedrockAiAnalystTest`
   pins the presence and shape of the Part A context block in the message sent to
   Bedrock, so a regression fails CI. No attempt to unit-test the model's judgment.
