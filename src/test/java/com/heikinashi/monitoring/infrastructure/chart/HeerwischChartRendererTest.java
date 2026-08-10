@@ -6,6 +6,7 @@ import com.heikinashi.monitoring.application.InMemoryHaRepository;
 import com.heikinashi.monitoring.domain.BarSnapshot;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaLookbackWindow;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
@@ -81,8 +82,9 @@ class HeerwischChartRendererTest {
                         last.haClose()),
                 Instant.parse("2026-05-07T22:00:00Z"));
 
-        HeerwischChartRenderer renderer = new HeerwischChartRenderer(haRepo, config);
-        ChartImage image = renderer.renderChart(event);
+        HeerwischChartRenderer renderer = new HeerwischChartRenderer(config);
+        ChartImage image =
+                renderer.renderChart(event, HaLookbackWindow.forEvent(haRepo, event, config.getLookbackBars()));
 
         assertThat(image.contentType()).isEqualTo("image/png");
         assertThat(image.widthPx()).isEqualTo(900);
@@ -127,7 +129,8 @@ class HeerwischChartRendererTest {
 
         // The renderer synthesizes the triggering bar from the snapshot so the
         // highlight still points at a real bar — no ChartRenderException.
-        ChartImage image = new HeerwischChartRenderer(haRepo, config).renderChart(event);
+        ChartImage image = new HeerwischChartRenderer(config)
+                .renderChart(event, HaLookbackWindow.forEvent(haRepo, event, config.getLookbackBars()));
         assertThat(image.contentType()).isEqualTo("image/png");
         assertThat(image.bytes()).startsWith(PNG_MAGIC);
     }

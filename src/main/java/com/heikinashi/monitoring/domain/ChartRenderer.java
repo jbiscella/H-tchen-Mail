@@ -8,5 +8,12 @@ package com.heikinashi.monitoring.domain;
  * render failure.
  */
 public interface ChartRenderer {
-    ChartImage renderChart(PatternEvent event);
+
+    /**
+     * Render the alert chart over {@code bars} — the window the <b>caller</b> resolved via
+     * {@link HaLookbackWindow#forEvent}. The renderer deliberately does NOT fetch its own
+     * window: the AI analyst must describe the very bars drawn here, and a second read could
+     * return a different series or fail independently (Block 18 invariant, CLAUDE.md).
+     */
+    ChartImage renderChart(PatternEvent event, java.util.List<HABar> bars);
 }

@@ -3,7 +3,6 @@ package com.heikinashi.monitoring.infrastructure.chart;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.ChartRenderer;
 import com.heikinashi.monitoring.domain.HABar;
-import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.error.ChartRenderException;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
@@ -49,30 +48,23 @@ public class HeerwischChartRenderer implements ChartRenderer {
     // HA charts read the Heikin-Ashi close (wichtelm charts raw OHLC and uses CLOSE).
     private static final PriceSource SOURCE = PriceSource.HA_CLOSE;
 
-    private final HaRepository haRepository;
     private final ChartConfig config;
     private final org.hatrack.heerwisch.api.port.ChartRenderer renderer;
 
-    public HeerwischChartRenderer(HaRepository haRepository, ChartConfig config) {
-        this.haRepository = haRepository;
+    public HeerwischChartRenderer(ChartConfig config) {
         this.config = config;
         this.renderer = newRenderer();
     }
 
     @Override
-    public ChartImage renderChart(PatternEvent event) {
+    public ChartImage renderChart(PatternEvent event, List<HABar> bars) {
         try {
-            List<HABar> bars = fetchLookback(event);
             ChartSpec spec = buildSpec(event, bars);
             org.hatrack.heerwisch.api.spec.ChartImage image = renderer.render(spec);
             return new ChartImage(image.bytes(), image.contentType(), image.widthPx(), image.heightPx());
         } catch (org.hatrack.heerwisch.api.error.ChartRenderException | RuntimeException e) {
             throw new ChartRenderException(e);
         }
-    }
-
-    private List<HABar> fetchLookback(PatternEvent event) {
-        return HaLookbackWindow.forEvent(haRepository, event, config.getLookbackBars());
     }
 
     private ChartSpec buildSpec(PatternEvent event, List<HABar> bars)

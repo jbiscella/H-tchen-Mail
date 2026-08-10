@@ -104,8 +104,12 @@ class SampleAlertEmailRenderTest {
         config.setLookbackBars(30);
         config.setWidthPx(900);
         config.setHeightPx(500);
-        byte[] png =
-                new HeerwischChartRenderer(haRepo, config).renderChart(event).bytes();
+        byte[] png = new HeerwischChartRenderer(config)
+                .renderChart(
+                        event,
+                        com.heikinashi.monitoring.domain.HaLookbackWindow.forEvent(
+                                haRepo, event, config.getLookbackBars()))
+                .bytes();
 
         String cid = "chart.png";
         String html = EmailBodies.html(event, Optional.of(cid), Optional.of(ai), AlertEnrichment.FULL);

@@ -121,9 +121,9 @@ public class BedrockAiAnalyst implements AiAnalyst {
     }
 
     @Override
-    public AiAnalysis analyze(PatternEvent event) {
+    public AiAnalysis analyze(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         try {
-            return runLoop(buildUserMessage(event), event.timeframe());
+            return runLoop(buildUserMessage(event, bars), event.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -210,7 +210,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
         return b.build();
     }
 
-    private Message buildUserMessage(PatternEvent event) {
+    private Message buildUserMessage(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         String prompt = "Pattern detected:\n"
                 + "  instrument: " + event.ticker() + " on " + event.exchange() + "\n"
                 + "  timeframe: " + event.timeframe().wire() + "\n"
@@ -225,7 +225,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 + ", high=" + event.barSnapshot().high()
                 + ", low=" + event.barSnapshot().low()
                 + ", close=" + event.barSnapshot().close() + "\n"
-                + technicalContextOf(() -> technicalContext.forPatternEvent(event))
+                + technicalContextOf(() -> technicalContext.forPatternEvent(event, bars))
                 + "Decide which tools to call, then write the note as JSON only.";
         return Message.builder()
                 .role(ConversationRole.USER)

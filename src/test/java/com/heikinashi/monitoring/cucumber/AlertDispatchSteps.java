@@ -104,6 +104,11 @@ public class AlertDispatchSteps {
 
     // -------- When ------------------------------------------------------------
 
+    @Given("the HA bar store is unavailable")
+    public void the_ha_bar_store_is_unavailable() {
+        world.haRepository().failReads();
+    }
+
     @When("I dispatch the staged events")
     public void i_dispatch_staged_events() {
         world.setLastDispatchSummary(world.alertDispatchService().dispatchAlerts(List.copyOf(world.stagedEvents())));

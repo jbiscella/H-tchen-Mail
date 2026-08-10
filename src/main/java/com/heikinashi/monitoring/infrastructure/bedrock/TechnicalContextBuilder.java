@@ -1,7 +1,7 @@
 package com.heikinashi.monitoring.infrastructure.bedrock;
 
 import com.heikinashi.monitoring.domain.HABar;
-import com.heikinashi.monitoring.domain.HaRepository;
+import com.heikinashi.monitoring.domain.HaLookbackWindow;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.strategy.Strategy;
@@ -9,7 +9,6 @@ import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import com.heikinashi.monitoring.infrastructure.chart.ChartIndicatorPlacement;
 import com.heikinashi.monitoring.infrastructure.chart.ConfiguredChartIndicators;
-import com.heikinashi.monitoring.infrastructure.chart.HaLookbackWindow;
 import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
@@ -81,22 +80,20 @@ public class TechnicalContextBuilder {
     /** How many trailing values of each indicator to show, so direction is readable, not just level. */
     private static final int PATH_POINTS = 5;
 
-    private final HaRepository haRepository;
     private final ChartConfig chartConfig;
 
-    public TechnicalContextBuilder(HaRepository haRepository, ChartConfig chartConfig) {
-        this.haRepository = haRepository;
+    public TechnicalContextBuilder(ChartConfig chartConfig) {
         this.chartConfig = chartConfig;
     }
 
     /**
      * Context for a pattern alert: HA series, {@code ha_close} basis, chart indicators from
-     * {@code monitoring.chart}. Uses the shared lookback helper, so the triggering bar is
-     * present here whenever it is present on the chart — including the
-     * {@code SNAPSHOT_ONLY} retry case where retention has already deleted it.
+     * {@code monitoring.chart}, over the window the <em>caller</em> resolved
+     * ({@link HaLookbackWindow#forEvent}) and drew the chart from. Not re-read here: sharing
+     * the helper shared only the algorithm, so two calls could still disagree — including on
+     * whether the {@code SNAPSHOT_ONLY}-evicted triggering bar exists.
      */
-    public String forPatternEvent(PatternEvent event) {
-        List<HABar> bars = HaLookbackWindow.forEvent(haRepository, event, chartConfig.getLookbackBars());
+    public String forPatternEvent(PatternEvent event, List<HABar> bars) {
         return render(
                 "Heikin-Ashi bars",
                 haRows(bars),

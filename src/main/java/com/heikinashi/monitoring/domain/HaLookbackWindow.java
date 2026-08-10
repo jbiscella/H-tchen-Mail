@@ -1,8 +1,5 @@
-package com.heikinashi.monitoring.infrastructure.chart;
+package com.heikinashi.monitoring.domain;
 
-import com.heikinashi.monitoring.domain.HABar;
-import com.heikinashi.monitoring.domain.HaRepository;
-import com.heikinashi.monitoring.domain.PatternEvent;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -11,6 +8,12 @@ import java.util.List;
 /**
  * The HA lookback window for a pattern alert, shared by the chart renderer and the AI
  * analyst's technical-context block so the two cannot disagree about which bars exist.
+ *
+ * <p>Lives in {@code domain}: it only ever touched domain types, and it sat in
+ * {@code infrastructure.chart} purely because it was extracted from the renderer. Moving it
+ * lets the application services resolve the window themselves without importing
+ * infrastructure (Block 18 invariant: the caller resolves once, both consumers receive the
+ * same list).
  *
  * <p>Extracted from {@code HeerwischChartRenderer.fetchLookback} for Block 18. The repair
  * below is the reason it must be shared rather than reimplemented: under

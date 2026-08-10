@@ -27,7 +27,7 @@ public final class ScriptedAiAnalyst implements AiAnalyst {
     }
 
     @Override
-    public AiAnalysis analyze(PatternEvent event) {
+    public AiAnalysis analyze(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         return nextAnalysis();
     }
 

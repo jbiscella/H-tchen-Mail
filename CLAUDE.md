@@ -3161,11 +3161,37 @@ Required behaviour:
   correctly compare the raw close against the HA close.
 
 - **Missing triggering bar (pattern flow).** Under `SNAPSHOT_ONLY` retention a
-  retried alert's bar may already be deleted. `HeerwischChartRenderer.fetchLookback`
-  repairs that from `event.barSnapshot()` so the chart still contains the triggering
-  candle; the context MUST apply the same repair through a shared helper
-  (`HaLookbackWindow`), or the chart and the note would disagree about whether the
-  alert bar exists (Codex P2).
+  retried alert's bar may already be deleted. The window resolution repairs that from
+  `event.barSnapshot()` so the chart still contains the triggering candle, and the
+  context sees the identical repaired list — see the invariant below, which supersedes
+  the earlier "shared helper" formulation. Sharing a helper shared the *algorithm*, not
+  the *data*: two calls to it could still return different windows (Codex P2).
+
+- **THE INVARIANT, stated once and applied to both flows.** *Whatever the note describes
+  about a rendered artefact is passed in; nothing about it is looked up.* Five review
+  rounds all reduced to one cause — this rule being rediscovered per case (the strategy
+  instance, then the strategy window, then the pattern window) instead of established
+  once. It is therefore enforced structurally: **`TechnicalContextBuilder` holds no
+  repository at all.** It cannot re-read, so it cannot disagree.
+
+  Concretely, for both flows the *caller* resolves the bar window exactly once and hands
+  the same list to the renderer and to the analyst:
+
+  | Flow | Who resolves the window | Passed to |
+  |---|---|---|
+  | `PatternEvent` | `AlertDispatchService` / `RetryPollerService`, via `HaLookbackWindow.forEvent` | `ChartRenderer.renderChart(event, bars)` **and** `AiAnalyst.analyze(event, bars)` |
+  | `StrategyAlert` | `MonitoringRunService` (fresh-bar merge) / `StrategyRetryPollerService` (trigger-bar splice) | `StrategyChartRenderer.render(alert, strategy, bars)` **and** `AiAnalyst.analyze(alert, strategy, bars)` |
+
+  **Layering, which this must not break** (no `application` class imports
+  `infrastructure`, and that holds today — verified, not assumed):
+  - `HaLookbackWindow` moves from `infrastructure.chart` to `domain`. It only ever
+    touched domain types (`HABar`, `HaRepository`, `PatternEvent`); it was in
+    infrastructure only because it was extracted from the renderer.
+  - the window size stays operator-configurable without leaking `ChartConfig` upward: a
+    `domain.ChartWindowPolicy { int lookbackBars(); }` abstraction, which `ChartConfig`
+    implements. This follows the `RecencyWindowSource` precedent (interface named where
+    it is consumed, config class as the single implementation) rather than hardcoding a
+    second copy of the default, which would silently diverge from `monitoring.chart`.
 
 - **Strategy flow: the caller passes the bar window; the analyst MUST NOT re-query
   it.** A fresh repository read is *not* equivalent to the list the chart was drawn
@@ -3484,6 +3510,26 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
   `StrategyRetryPollerService` hoisting it out of `reRenderChart` for the same reason
   it hoisted the strategy lookup.
 
+  **Sharing the window MUST NOT make degradation depend on bar storage.** Hoisting the
+  read out of `reRenderChart` moved it ahead of the `strategy.flatMap(...)` that used to
+  short-circuit it, so on the **strategy-deleted** path — which previously never read
+  bars at all — a transient failure began escaping `processOne`. `processBatch` has no
+  per-item guard, so that aborted the entire retry batch and lost the degraded send this
+  path exists to produce. Obtaining the window is therefore **best-effort**: any failure
+  degrades to an empty window, which yields a chart-degraded send and a context-free note
+  — exactly the pre-existing outcome.
+
+  The catch is `RuntimeException`, not `DependencyUnavailableException`, because
+  `DynamoDbOhlcRepository.findLastN` calls `client.query` **without wrapping**: a real
+  outage arrives as a raw AWS SDK exception, so catching only the domain type would have
+  read as a fix while leaving the actual failure mode untouched.
+
+  Recorded because it is a regression this increment introduced, and a live invariant for
+  anyone who moves that read again. Note what is *not* changed here: `processBatch` still
+  has no per-item guard, so any other per-item throw still aborts the batch. Making the
+  batch loop fault-isolating is a change to retry semantics for every failure mode and is
+  deliberately left as its own decision, not smuggled in behind this fix.
+
   **Invariant established:** the note describes the strategy *and* the series the
   chart was rendered from, because they are the same objects — not second derivations
   that happen to agree. `TechnicalContextBuilder` therefore holds neither a
@@ -3496,10 +3542,29 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
   send): it yields the bar series with no indicators. `Optional` is not used as a
   parameter, per §13.
 
+- **The `ChartRenderer` port and the pattern dispatch/retry paths** — boundary widened a
+  second time, on request, after the reviewer applied the invariant above to the pattern
+  flow too. Both were listed out of bounds below; the entry is moved here rather than
+  quietly deleted, because the original reason for excluding them still stands and was
+  simply outweighed.
+
+  The asymmetry that forced it: in the strategy flow the caller already held the bars, so
+  passing them cost nothing. In the pattern flow the *renderer* fetched its own window, so
+  there was no way for the analyst to receive the drawn bars without changing the port.
+  Choosing correctness over the narrower diff means `renderChart` takes the window,
+  `AlertDispatchService` / `RetryPollerService` resolve it once, and the two consumers can
+  no longer diverge — closing the whole finding class structurally instead of case by case.
+
+  Rejected alternative: having `renderChart` *return* the window it used. It would also
+  guarantee one read, but it makes the port's return type carry drawing internals and it
+  would leave the two flows with different shapes. Passing the window in matches the
+  strategy flow exactly, so there is one rule to remember rather than two.
+
 *Out of bounds — unchanged, and a reason to stop and report if pressure builds:*
 
-- The `ChartRenderer` port signature, and the **pattern** dispatch/retry paths
-  (`AlertDispatchService`, `RetryPollerService`).
+- Fault isolation in the retry batch loops. `processBatch` still has no per-item guard, so
+  a per-item throw other than the bar-window read still aborts the batch. Changing that
+  alters retry semantics for every failure mode and is its own decision.
 - `NewsHeadline`, `HABar`, provider enablement, dedup rules, `AlertEnrichment`.
 - Chart rendering output — no visual change to the emailed image.
 - Any new Maven dependency.

@@ -184,13 +184,35 @@ public class StrategyRetryPollerService {
      * The bar window for this retry: the persisted lookback with the triggering bar
      * restored if retention evicted it. Resolved once per alert and shared by the chart
      * and the AI note, so both describe the same series.
+     *
+     * <p>Obtaining the window is <b>best-effort</b>: any failure degrades to an empty window
+     * rather than propagating. Hoisting this read out of {@link #reRenderChart} (so the chart
+     * and the note share one list) moved it ahead of the {@code strategy.flatMap(...)} that
+     * used to short-circuit it, so on the <b>strategy-deleted</b> path — which previously
+     * never read bars at all — a transient failure began escaping {@code processOne}. Since
+     * {@code processBatch} has no per-item guard, that aborted the whole batch and lost the
+     * degraded send this path exists to produce. Regression found by a Codex review of PR #86.
+     *
+     * <p>The catch is deliberately {@link RuntimeException} and not
+     * {@code DependencyUnavailableException}: {@code DynamoDbOhlcRepository.findLastN} calls
+     * {@code client.query} without wrapping, so a real outage arrives as a raw AWS SDK
+     * exception. Catching only the domain type would have read as a fix while leaving the
+     * actual failure mode untouched. An empty window yields exactly the pre-existing outcome:
+     * the render fails and is caught (chart-degraded send), and the note carries no context
+     * block.
      */
     private List<OHLCBar> lookbackWindow(PendingStrategyAlert pending) {
         StrategyAlert alert = pending.alert();
-        return withTriggerBar(
-                ohlcRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
-                alert.barTime(),
-                pending.triggerBar());
+        try {
+            return withTriggerBar(
+                    ohlcRepository.findLastN(
+                            alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
+                    alert.barTime(),
+                    pending.triggerBar());
+        } catch (RuntimeException e) {
+            logRetryFailure(alert, "bars", e);
+            return List.of();
+        }
     }
 
     /**

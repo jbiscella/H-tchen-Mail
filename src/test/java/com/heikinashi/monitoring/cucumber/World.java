@@ -61,6 +61,15 @@ public final class World {
     private final InMemoryInstrumentRepository repository = new InMemoryInstrumentRepository();
     private final InMemoryOhlcRepository ohlcRepository = new InMemoryOhlcRepository();
     private final InMemoryHaRepository haRepository = new InMemoryHaRepository();
+
+    /**
+     * Chart window for the wired services — the {@code monitoring.chart.lookback-bars}
+     * default. {@code ChartWindowPolicy} is a functional interface precisely so the tests can
+     * supply the number without dragging the infrastructure config class into the application
+     * wiring (Block 18).
+     */
+    private static final com.heikinashi.monitoring.domain.ChartWindowPolicy CHART_WINDOW = () -> 30;
+
     private final InMemoryMarketDataProvider marketData = new InMemoryMarketDataProvider();
     private final InMemoryPendingAlertRepository pendingAlerts = new InMemoryPendingAlertRepository();
     private final InMemoryPendingStrategyAlertRepository pendingStrategyAlerts =
@@ -166,6 +175,8 @@ public final class World {
         alertDispatchService = new AlertDispatchService(
                 repository,
                 chartRenderer,
+                haRepository,
+                CHART_WINDOW,
                 aiAnalyst,
                 emailSender,
                 pendingAlerts,
@@ -198,6 +209,8 @@ public final class World {
         retryPollerService = new RetryPollerService(
                 repository,
                 chartRenderer,
+                haRepository,
+                CHART_WINDOW,
                 aiAnalyst,
                 emailSender,
                 pendingAlerts,
@@ -302,6 +315,8 @@ public final class World {
         return new RetryPollerService(
                 repository,
                 chartRenderer,
+                haRepository,
+                CHART_WINDOW,
                 aiAnalyst,
                 emailSender,
                 pending,

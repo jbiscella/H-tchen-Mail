@@ -17,6 +17,18 @@ public final class InMemoryHaRepository implements HaRepository {
     private final Map<String, TreeMap<Instant, HABar>> byKey = new HashMap<>();
     private final Map<String, Long> ttlByKey = new HashMap<>();
 
+    private boolean readsFail;
+
+    /**
+     * Simulates an HA-store outage on {@link #findLastNBefore}. A bare
+     * {@link RuntimeException} on purpose: the production repository does not wrap SDK
+     * failures, so a handler that caught only a domain exception type would pass here while
+     * still breaking in production.
+     */
+    public void failReads() {
+        this.readsFail = true;
+    }
+
     @Override
     public Optional<HABar> findLatestBefore(String instrumentId, Timeframe tf, Instant before) {
         TreeMap<Instant, HABar> bars = byKey.get(key(instrumentId, tf));
@@ -29,6 +41,9 @@ public final class InMemoryHaRepository implements HaRepository {
 
     @Override
     public List<HABar> findLastNBefore(String instrumentId, Timeframe tf, Instant before, int n) {
+        if (readsFail) {
+            throw new RuntimeException("simulated ha store outage");
+        }
         TreeMap<Instant, HABar> bars = byKey.get(key(instrumentId, tf));
         if (bars == null || bars.isEmpty() || n <= 0) {
             return List.of();

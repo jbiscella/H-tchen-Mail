@@ -6,7 +6,13 @@ package com.heikinashi.monitoring.domain;
  * model / loop / parse failures.
  */
 public interface AiAnalyst {
-    AiAnalysis analyze(PatternEvent event);
+
+    /**
+     * Analyze a pattern alert over {@code bars} — the window the caller resolved via
+     * {@link HaLookbackWindow#forEvent} and passed to {@link ChartRenderer#renderChart} too,
+     * so the note describes exactly the candles the reader was sent (Block 18 invariant).
+     */
+    AiAnalysis analyze(PatternEvent event, java.util.List<HABar> bars);
 
     /**
      * Analyze a strategy alert (CLAUDE.md §9 Component 1c). The prompt describes
