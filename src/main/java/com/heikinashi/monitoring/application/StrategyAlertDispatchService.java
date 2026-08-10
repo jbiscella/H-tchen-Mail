@@ -108,7 +108,9 @@ public class StrategyAlertDispatchService {
 
         AiAnalysis analysis;
         try {
-            analysis = aiAnalyst.analyze(alert);
+            // Pass the firing strategy — the same instance the chart above was rendered
+            // from — so the note cannot describe a strategy that was re-imported since.
+            analysis = aiAnalyst.analyze(alert, strategy);
         } catch (LLMException | DependencyUnavailableException e) {
             return enqueue(alert, bars, "ai", e);
         }

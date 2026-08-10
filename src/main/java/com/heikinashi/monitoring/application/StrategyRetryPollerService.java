@@ -140,11 +140,24 @@ public class StrategyRetryPollerService {
             return result;
         }
 
-        Optional<ChartImage> chart = reRenderChart(claimed);
+        // One lookup, shared by the chart and the note, so both describe the SAME
+        // strategy instance. Two independent lookups could disagree if the strategy were
+        // re-imported between them (Block 18 / Codex review of PR #86).
+        Optional<Strategy> strategy = strategies.findByInstrumentId(alert.instrumentId());
+        if (strategy.isEmpty()) {
+            LOG.warn(
+                    "strategy_retry_no_strategy instrument_id={} bar_time={} (chart-degraded)",
+                    alert.instrumentId(),
+                    alert.barTime());
+        }
+        Optional<ChartImage> chart = strategy.flatMap(s -> reRenderChart(claimed, s));
 
         Optional<AiAnalysis> analysis;
         try {
-            analysis = Optional.of(aiAnalyst.analyze(alert));
+            // Strategy gone => already chart-degraded; the note falls back to the bar series
+            // with no indicators rather than inventing an indicator set.
+            analysis = Optional.of(
+                    strategy.map(s -> aiAnalyst.analyze(alert, s)).orElseGet(() -> aiAnalyst.analyze(alert)));
         } catch (LLMException | DependencyUnavailableException e) {
             logRetryFailure(alert, "ai", e);
             analysis = Optional.empty();
@@ -167,16 +180,9 @@ public class StrategyRetryPollerService {
      * strategy was deleted since detection, or the render still fails (the send is
      * then chart-degraded).
      */
-    private Optional<ChartImage> reRenderChart(PendingStrategyAlert pending) {
+    private Optional<ChartImage> reRenderChart(PendingStrategyAlert pending, Strategy resolved) {
         StrategyAlert alert = pending.alert();
-        Optional<Strategy> strategy = strategies.findByInstrumentId(alert.instrumentId());
-        if (strategy.isEmpty()) {
-            LOG.warn(
-                    "strategy_retry_no_strategy instrument_id={} bar_time={} (chart-degraded)",
-                    alert.instrumentId(),
-                    alert.barTime());
-            return Optional.empty();
-        }
+        Optional<Strategy> strategy = Optional.of(resolved);
         List<OHLCBar> bars = withTriggerBar(
                 ohlcRepository.findLastN(alert.instrumentId(), alert.timeframe(), alert.barTime(), CHART_LOOKBACK_BARS),
                 alert.barTime(),

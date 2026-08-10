@@ -3420,11 +3420,28 @@ news layer, so the boundary is stated explicitly rather than left to judgment.
 - `NewsAggregator`, `EodhdNewsProvider`, `MarketauxNewsProvider`: per Part B.
 - `NewsConfig` plus the three new keys above.
 
+- **The `AiAnalyst` port and the strategy dispatch/retry paths** — boundary widened
+  mid-increment, deliberately and on request, after a Codex review of PR #86 found
+  that re-looking-up the strategy by instrument id can yield a different strategy
+  than the one that fired and was charted. `analyze` gains a strategy-bearing
+  overload, `StrategyAlertDispatchService` passes the firing strategy it already
+  holds, and `StrategyRetryPollerService` hoists its single lookup so the chart and
+  the note are drawn from the *same* `Strategy` object.
+
+  **Invariant established:** the note describes the strategy the chart was rendered
+  from, because it is the same instance — not a second lookup that happens to
+  agree. `TechnicalContextBuilder` therefore holds no `StrategyRepository` at all,
+  which removes the race rather than narrowing it.
+
+  The no-strategy overload is retained for the genuinely degraded retry case (the
+  strategy was deleted since detection, which already forces a chart-degraded
+  send): it yields the bar series with no indicators. `Optional` is not used as a
+  parameter, per §13.
+
 *Out of bounds — unchanged, and a reason to stop and report if pressure builds:*
 
-- The `ChartRenderer` and `AiAnalyst` **port signatures**, and every dispatch and
-  retry path (`AlertDispatchService`, `StrategyAlertDispatchService`,
-  `RetryPollerService`, `StrategyRetryPollerService`).
+- The `ChartRenderer` port signature, and the **pattern** dispatch/retry paths
+  (`AlertDispatchService`, `RetryPollerService`).
 - `NewsHeadline`, `HABar`, provider enablement, dedup rules, `AlertEnrichment`.
 - Chart rendering output — no visual change to the emailed image.
 - Any new Maven dependency.

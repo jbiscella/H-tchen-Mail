@@ -132,9 +132,24 @@ public class BedrockAiAnalyst implements AiAnalyst {
     }
 
     @Override
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy) {
+        try {
+            return runLoop(
+                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, strategy)),
+                    alert.timeframe());
+        } catch (LLMException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new LLMException("Bedrock invocation failed", e);
+        }
+    }
+
+    @Override
     public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
         try {
-            return runLoop(buildUserMessage(alert), alert.timeframe());
+            return runLoop(buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert)), alert.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -214,7 +229,9 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 .build();
     }
 
-    private Message buildUserMessage(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    private Message buildUserMessage(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.function.Supplier<String> contextSupplier) {
         StringBuilder sb = new StringBuilder();
         sb.append("Strategy alert:\n")
                 .append("  instrument: ")
@@ -239,7 +256,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                     .append(line.role())
                     .append("]\n");
         }
-        sb.append(technicalContextOf(() -> technicalContext.forStrategyAlert(alert)));
+        sb.append(technicalContextOf(contextSupplier));
         sb.append("Decide which tools to call, then write the note as JSON only.");
         return Message.builder()
                 .role(ConversationRole.USER)

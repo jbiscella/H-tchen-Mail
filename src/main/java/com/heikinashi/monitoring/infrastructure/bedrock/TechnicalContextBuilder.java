@@ -5,8 +5,8 @@ import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.OhlcRepository;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.Timeframe;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
-import com.heikinashi.monitoring.domain.strategy.StrategyRepository;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import com.heikinashi.monitoring.infrastructure.chart.ConfiguredChartIndicators;
 import com.heikinashi.monitoring.infrastructure.chart.HaLookbackWindow;
@@ -79,17 +79,11 @@ public class TechnicalContextBuilder {
     private final HaRepository haRepository;
     private final OhlcRepository ohlcRepository;
     private final ChartConfig chartConfig;
-    private final StrategyRepository strategyRepository;
 
-    public TechnicalContextBuilder(
-            HaRepository haRepository,
-            OhlcRepository ohlcRepository,
-            ChartConfig chartConfig,
-            StrategyRepository strategyRepository) {
+    public TechnicalContextBuilder(HaRepository haRepository, OhlcRepository ohlcRepository, ChartConfig chartConfig) {
         this.haRepository = haRepository;
         this.ohlcRepository = ohlcRepository;
         this.chartConfig = chartConfig;
-        this.strategyRepository = strategyRepository;
     }
 
     /**
@@ -111,17 +105,29 @@ public class TechnicalContextBuilder {
 
     /**
      * Context for a strategy alert: raw OHLC series, raw-close basis, indicators derived
-     * from the instrument's strategy. A missing strategy yields the series with no
-     * indicators rather than an error — the series alone is already more than this flow
-     * carried before, which was no bar values at all.
+     * from the strategy the <em>caller</em> rendered the chart from.
+     *
+     * <p>The strategy is a parameter rather than a repository lookup on purpose. Looking it
+     * up here would let a re-import between dispatch and this call swap it, so the note
+     * could describe indicators the attached chart does not draw. Passing the same instance
+     * removes the race instead of narrowing it.
+     */
+    public String forStrategyAlert(StrategyAlert alert, Strategy strategy) {
+        return strategyContext(alert, StrategyChartIndicators.derive(strategy));
+    }
+
+    /**
+     * Degraded variant: the strategy was deleted since detection, so the send is already
+     * chart-degraded. The series still carries useful price action; the indicator set is a
+     * property of the strategy, so there is none to report.
      */
     public String forStrategyAlert(StrategyAlert alert) {
+        return strategyContext(alert, List.of());
+    }
+
+    private String strategyContext(StrategyAlert alert, List<Indicator> indicators) {
         List<com.heikinashi.monitoring.domain.OHLCBar> bars = ohlcRepository.findLastN(
                 alert.instrumentId(), alert.timeframe(), alert.barTime(), STRATEGY_LOOKBACK_BARS);
-        List<Indicator> indicators = strategyRepository
-                .findByInstrumentId(alert.instrumentId())
-                .map(StrategyChartIndicators::derive)
-                .orElseGet(List::of);
         if (bars.isEmpty()) {
             return "";
         }

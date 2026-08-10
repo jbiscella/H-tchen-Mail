@@ -32,6 +32,15 @@ public final class ScriptedAiAnalyst implements AiAnalyst {
     }
 
     @Override
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy) {
+        // Block 18: callers pass the strategy the chart was drawn from; the scripted
+        // double answers identically either way.
+        return analyze(alert);
+    }
+
+    @Override
     public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
         return nextAnalysis();
     }

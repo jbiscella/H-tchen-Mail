@@ -11,7 +11,6 @@ import static org.mockito.Mockito.when;
 import com.heikinashi.monitoring.application.InMemoryHaRepository;
 import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.application.InMemoryOhlcRepository;
-import com.heikinashi.monitoring.application.InMemoryStrategyRepository;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiConfidence;
 import com.heikinashi.monitoring.domain.BarSnapshot;
@@ -22,8 +21,10 @@ import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.LLMException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
 import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
+import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
 import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -294,8 +295,8 @@ class BedrockAiAnalystTest {
         HaRepository failing = Mockito.mock(HaRepository.class);
         when(failing.findLastNBefore(any(), any(), any(), Mockito.anyInt()))
                 .thenThrow(new IllegalStateException("repository down"));
-        TechnicalContextBuilder exploding = new TechnicalContextBuilder(
-                failing, new InMemoryOhlcRepository(), chartConfig(), new InMemoryStrategyRepository());
+        TechnicalContextBuilder exploding =
+                new TechnicalContextBuilder(failing, new InMemoryOhlcRepository(), chartConfig());
 
         AiAnalysis result = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), exploding)
                 .analyze(EVENT);
@@ -332,11 +333,8 @@ class BedrockAiAnalystTest {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
         new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
         // Empty HA repository = retention removed everything, including the alert bar.
-        TechnicalContextBuilder context = new TechnicalContextBuilder(
-                new InMemoryHaRepository(),
-                new InMemoryOhlcRepository(),
-                chartConfig(),
-                new InMemoryStrategyRepository());
+        TechnicalContextBuilder context =
+                new TechnicalContextBuilder(new InMemoryHaRepository(), new InMemoryOhlcRepository(), chartConfig());
 
         new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context).analyze(EVENT);
 
@@ -372,8 +370,7 @@ class BedrockAiAnalystTest {
                     Optional.empty());
         }
         // An HA repository that would answer with different numbers if it were consulted.
-        TechnicalContextBuilder context = new TechnicalContextBuilder(
-                new InMemoryHaRepository(), ohlc, chartConfig(), new InMemoryStrategyRepository());
+        TechnicalContextBuilder context = new TechnicalContextBuilder(new InMemoryHaRepository(), ohlc, chartConfig());
 
         new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context)
                 .analyze(STRATEGY_ALERT);
@@ -382,6 +379,86 @@ class BedrockAiAnalystTest {
         assertThat(user).contains("raw OHLC bars");
         assertThat(user).contains("bar_time  open  high  low  close");
         assertThat(user).doesNotContain("ha_close");
+    }
+
+    @Test
+    void a_strategy_alert_derives_indicators_from_the_passed_strategy_not_a_lookup() {
+        // Codex P2: re-looking-up the strategy by instrument id let a re-import between
+        // dispatch and this call swap it, so the note could describe indicators the attached
+        // chart does not draw. The strategy is now a parameter and the builder holds no
+        // repository, so the note and the chart describe the same instance by construction.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        InMemoryOhlcRepository ohlc = new InMemoryOhlcRepository();
+        for (int i = 1; i <= 40; i++) {
+            BigDecimal close = new BigDecimal(200 + i);
+            ohlc.putBar(
+                    new com.heikinashi.monitoring.domain.OHLCBar(
+                            STRATEGY_ALERT.instrumentId(),
+                            STRATEGY_ALERT.timeframe(),
+                            STRATEGY_ALERT.barTime().minusSeconds((40 - i) * 86400L),
+                            close.subtract(BigDecimal.ONE),
+                            close.add(BigDecimal.ONE),
+                            close.subtract(BigDecimal.ONE),
+                            close,
+                            Optional.empty(),
+                            "test",
+                            EVENT.detectedAt()),
+                    Optional.empty());
+        }
+        Strategy passed = new Strategy(
+                "passed-strategy",
+                List.of(new StrategyScenario(
+                        "enter long",
+                        "long_entry",
+                        List.of("rsi(20) is below 30"),
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.empty())));
+
+        new BedrockAiAnalyst(
+                        client,
+                        configWithCap(8),
+                        new InMemoryMarketDataProvider(),
+                        new TechnicalContextBuilder(new InMemoryHaRepository(), ohlc, chartConfig()))
+                .analyze(STRATEGY_ALERT, passed);
+
+        assertThat(capturedUserText(client)).contains("RSI(20) = ");
+    }
+
+    @Test
+    void the_degraded_overload_reports_the_series_without_indicators() {
+        // Strategy deleted since detection: the send is already chart-degraded, so the note
+        // carries price action but must not invent an indicator set.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        InMemoryOhlcRepository ohlc = new InMemoryOhlcRepository();
+        ohlc.putBar(
+                new com.heikinashi.monitoring.domain.OHLCBar(
+                        STRATEGY_ALERT.instrumentId(),
+                        STRATEGY_ALERT.timeframe(),
+                        STRATEGY_ALERT.barTime(),
+                        new BigDecimal("100"),
+                        new BigDecimal("101"),
+                        new BigDecimal("99"),
+                        new BigDecimal("100"),
+                        Optional.empty(),
+                        "test",
+                        EVENT.detectedAt()),
+                Optional.empty());
+
+        new BedrockAiAnalyst(
+                        client,
+                        configWithCap(8),
+                        new InMemoryMarketDataProvider(),
+                        new TechnicalContextBuilder(new InMemoryHaRepository(), ohlc, chartConfig()))
+                .analyze(STRATEGY_ALERT);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("raw OHLC bars");
+        assertThat(user).doesNotContain("Indicator values");
     }
 
     /** The USER-role text of the first captured request. */
@@ -397,11 +474,7 @@ class BedrockAiAnalystTest {
 
     /** A context builder over an empty HA repository — yields no block, so pre-Block-18 assertions hold. */
     private static TechnicalContextBuilder emptyContext() {
-        return new TechnicalContextBuilder(
-                new InMemoryHaRepository(),
-                new InMemoryOhlcRepository(),
-                chartConfig(),
-                new InMemoryStrategyRepository());
+        return new TechnicalContextBuilder(new InMemoryHaRepository(), new InMemoryOhlcRepository(), chartConfig());
     }
 
     private static TechnicalContextBuilder contextWithBars(int bars) {
@@ -430,8 +503,7 @@ class BedrockAiAnalystTest {
                             EVENT.detectedAt()),
                     Optional.empty());
         }
-        return new TechnicalContextBuilder(
-                repo, new InMemoryOhlcRepository(), config, new InMemoryStrategyRepository());
+        return new TechnicalContextBuilder(repo, new InMemoryOhlcRepository(), config);
     }
 
     // -------- helpers --------------------------------------------------------
