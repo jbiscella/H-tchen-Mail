@@ -377,6 +377,42 @@ class BedrockAiAnalystTest {
     }
 
     @Test
+    void values_that_no_fixed_scale_can_separate_are_printed_exactly() {
+        // Codex P2 on PR #87, second finding on this formatter: the bounded search returned
+        // MAX_SCALE unconditionally when the whole range failed, so values differing only past
+        // 8 dp still collapsed — 0.000000004 vs -0.000000004 both became 0.00000000, erasing a
+        // MACD crossing exactly as the flat 2dp had. Raising the cap only moves that boundary,
+        // so exhaustion now means "do not shorten at all".
+        //
+        // This is the boundary-exhaustion case for the cap, which the first version of the
+        // search never exercised.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(2);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        // SMA(2) over these yields 0.0000000035 then 0.0000000025 — distinct, but identical at
+        // every scale from 2 to 8.
+        List<HABar> window = List.of(
+                barWith("0.000000003", "0.000000004", "0.000000003", "0.000000004"),
+                barWith("0.000000004", "0.000000004", "0.000000003", "0.000000003"),
+                barWith("0.000000003", "0.000000003", "0.000000002", "0.000000002"));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, window);
+
+        String user = capturedUserText(client);
+        String indicator =
+                user.lines().filter(l -> l.contains("SMA(2) = ")).findFirst().orElseThrow();
+        // Neither flattened to zero, and the two path points stayed distinct. Note the negative
+        // assertion has to name the collapsed *path* — doesNotContain("0.00000000") would fail
+        // against the correct output, because "0.0000000025" contains that substring.
+        assertThat(indicator).contains("0.0000000035").contains("0.0000000025");
+        assertThat(indicator).doesNotContain("[0.00000000,");
+    }
+
+    @Test
     void bar_rows_are_printed_at_two_decimals() {
         // The live note wrote "ha_close ... roughly 52.2 on 30 June" against a row reading
         // ha_open 51.79760900267785 / ha_high 52 / ha_low 50.9 / ha_close 51.385 — right row,

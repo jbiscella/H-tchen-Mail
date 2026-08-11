@@ -3274,17 +3274,25 @@ extract from a grid drift.** Three changes follow from it, all display-only:
    | MACD histogram near a zero cross: `0.0034`, `-0.0021` | `0.00`, **`-0.00`** | the cross the alert keyed on becomes invisible, and a negative zero is actively misleading |
    | Low-priced HA candle: `ha_open 1.001`, `ha_close 1.004` | `1.00`, `1.00` | the row shows an identical open and close while `colourOf` still labels it green from full precision — an internally contradictory context, exactly the confusion this section exists to remove |
 
-   So the printed scale is chosen **per series**, as the smallest scale in
-   `[2, 8]` that preserves the distinctions a reader depends on:
+   So the printed precision is chosen **per series**, as the smallest scale in
+   `[2, 8]` (bound inclusive) that preserves the distinctions a reader depends on:
    - a value that is non-zero must not display as zero (so sign survives);
    - within a bar, an `open` and `close` that genuinely differ must not display
      as equal (so the row can never contradict its own colour label);
    - along an indicator path, adjacent points that genuinely differ must not
      display as equal (so direction and crossings survive).
 
-   One scale per series, so columns stay aligned. Price-scaled series still land on
-   2 dp — the case that motivated the change — while small-magnitude indicators keep
-   the digits that carry their meaning.
+   **When no scale in that range works, the series is not shortened at all** — it
+   prints exactly. A bounded search needs an answer for "the bound was exhausted",
+   and the first version returned the maximum unconditionally, so values differing
+   only past 8 dp (`0.000000004` against `-0.000000004`) collapsed exactly as the
+   flat 2 dp had (Codex P2, second finding on this formatter). Raising the cap only
+   moves that boundary; refusing to shorten removes it. Brevity is a nicety here,
+   fidelity is not.
+
+   One precision per series, so columns stay aligned. Price-scaled series still land
+   on 2 dp — the case that motivated the change — while small-magnitude indicators
+   keep the digits that carry their meaning.
 2. **Pre-compute the anchors the model reaches for**, as labelled lines beside the
    indicator values: window first close, window lowest close with its date, window
    highest close with its date, the change from the low to the alert bar, and the
@@ -3322,6 +3330,11 @@ Scenario: A near-zero indicator keeps the precision that carries its sign
   When the technical context is built
   Then neither point displays as 0.00
   And the negative point still displays as negative
+
+Scenario: Values no fixed scale can separate are printed exactly
+  Given an indicator path whose points differ only beyond eight decimal places
+  When the technical context is built
+  Then the points are printed in full rather than collapsed to a shared value
 
 Scenario: A low-priced candle never shows an open equal to its close
   Given an HA bar whose ha_open is 1.001 and ha_close is 1.004

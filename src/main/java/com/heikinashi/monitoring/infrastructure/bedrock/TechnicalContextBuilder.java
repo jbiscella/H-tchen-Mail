@@ -191,18 +191,46 @@ public class TechnicalContextBuilder {
     /** Shortest display scale tried — price series settle here. */
     private static final int MIN_SCALE = 2;
 
-    /** Longest display scale tried; beyond this, brevity loses to fidelity anyway. */
+    /** Longest fixed scale tried; past this, shortening is abandoned rather than forced. */
     private static final int MAX_SCALE = 8;
 
     /**
-     * Printed form of a value at a chosen scale. Part A.2 — the first live note drifted
-     * "roughly 52.2" out of a row reading ha_close 51.385 alongside ha_open
-     * 51.79760900267785, and full-precision BigDecimals are hostile to a model reproducing
-     * them in prose. Display only: indicators are still computed on the unrounded series, so
-     * this can never move a value.
+     * How one series is printed: a fixed number of decimals, or {@code exact} when no fixed
+     * scale can shorten it without destroying a distinction.
+     *
+     * <p>The {@code exact} arm exists because a bounded search needs an answer for "the bound
+     * was exhausted". The first version returned {@code MAX_SCALE} unconditionally, so values
+     * differing only past 8 dp — {@code 0.000000004} against {@code -0.000000004} — printed
+     * identically as {@code 0.00000000} and a MACD crossing vanished again (Codex P2 on PR
+     * #87, the second finding on this formatter). Raising the cap would only move that
+     * boundary; refusing to shorten removes it. Brevity is a nicety here, fidelity is not.
      */
-    private static String show(BigDecimal v, int scale) {
-        return v.setScale(scale, RoundingMode.HALF_UP).toPlainString();
+    private record Precision(int scale, boolean verbatim) {
+
+        static Precision fixed(int scale) {
+            return new Precision(scale, false);
+        }
+
+        /** Component is {@code verbatim}, not {@code exact}: a record accessor cannot share a
+         * name with a static factory. */
+        static Precision exact() {
+            return new Precision(0, true);
+        }
+
+        /**
+         * Part A.2 — the first live note drifted "roughly 52.2" out of a row reading ha_close
+         * 51.385 alongside ha_open 51.79760900267785, and full-precision BigDecimals are
+         * hostile to a model reproducing them in prose. Display only: indicators are still
+         * computed on the unrounded series, so this can never move a value.
+         *
+         * <p>{@code toPlainString} throughout, including the exact arm: {@code toString} would
+         * render a round number like 100 as {@code 1E+2}.
+         */
+        String show(BigDecimal v) {
+            return verbatim
+                    ? v.stripTrailingZeros().toPlainString()
+                    : v.setScale(scale, RoundingMode.HALF_UP).toPlainString();
+        }
     }
 
     /**
@@ -216,19 +244,24 @@ public class TechnicalContextBuilder {
 
     /** Whether two values that genuinely differ would display identically at {@code scale}. */
     private static boolean collapses(BigDecimal a, BigDecimal b, int scale) {
-        return a.compareTo(b) != 0 && show(a, scale).equals(show(b, scale));
+        return a.compareTo(b) != 0
+                && Precision.fixed(scale).show(a).equals(Precision.fixed(scale).show(b));
     }
 
     /**
-     * The smallest scale in {@code [MIN_SCALE, MAX_SCALE]} at which every value keeps its sign
-     * and no {@code mustDiffer} pair collapses. One scale per series, so columns stay aligned.
+     * The shortest safe way to print a series: the smallest scale in
+     * {@code [MIN_SCALE, MAX_SCALE]} — the bound <b>inclusive</b> — at which every value keeps
+     * its sign and no {@code mustDiffer} pair collapses, or {@link Precision#exact()} when no
+     * such scale exists. One precision per series, so columns stay aligned.
      *
      * <p>A fixed 2 dp was the first implementation and it is a <em>price</em>-shaped format:
-     * correct for a €57 instrument, destructive for a small-magnitude indicator or a
-     * low-priced one. Choosing the scale from the data keeps the brevity where it is safe.
+     * correct for a €57 instrument, destructive for a small-magnitude indicator or a low-priced
+     * one. Choosing from the data keeps the brevity where it is safe and drops it where it is
+     * not — including when the whole range is unsafe, which the first bounded version silently
+     * treated as success.
      */
-    private static int scaleFor(List<BigDecimal> values, List<BigDecimal[]> mustDiffer) {
-        for (int scale = MIN_SCALE; scale < MAX_SCALE; scale++) {
+    private static Precision precisionFor(List<BigDecimal> values, List<BigDecimal[]> mustDiffer) {
+        for (int scale = MIN_SCALE; scale <= MAX_SCALE; scale++) {
             boolean ok = true;
             for (BigDecimal v : values) {
                 if (flattensToZero(v, scale)) {
@@ -245,10 +278,10 @@ public class TechnicalContextBuilder {
                 }
             }
             if (ok) {
-                return scale;
+                return Precision.fixed(scale);
             }
         }
-        return MAX_SCALE;
+        return Precision.exact();
     }
 
     /** A bar reduced to what the anchors need. */
@@ -270,13 +303,13 @@ public class TechnicalContextBuilder {
         Anchor high = series.stream().max(Comparator.comparing(Anchor::close)).orElseThrow();
         // Anchors are quoted as levels, so they must not collapse into each other either: a
         // window whose low and high printed the same number would assert a flat series.
-        int scale = scaleFor(
+        Precision precision = precisionFor(
                 series.stream().map(Anchor::close).toList(),
                 List.of(new BigDecimal[] {low.close(), high.close()}, new BigDecimal[] {first.close(), last.close()}));
         List<String> lines = new ArrayList<>(5);
-        lines.add("window first %s = %s on %s".formatted(closeLabel, show(first.close(), scale), first.time()));
-        lines.add("lowest %s = %s on %s".formatted(closeLabel, show(low.close(), scale), low.time()));
-        lines.add("highest %s = %s on %s".formatted(closeLabel, show(high.close(), scale), high.time()));
+        lines.add("window first %s = %s on %s".formatted(closeLabel, precision.show(first.close()), first.time()));
+        lines.add("lowest %s = %s on %s".formatted(closeLabel, precision.show(low.close()), low.time()));
+        lines.add("highest %s = %s on %s".formatted(closeLabel, precision.show(high.close()), high.time()));
         lines.add("change from lowest %s to alert bar = %s%%".formatted(closeLabel, pct(low.close(), last.close())));
         lines.add("change across window = %s%%".formatted(pct(first.close(), last.close())));
         return lines;
@@ -294,7 +327,7 @@ public class TechnicalContextBuilder {
         BigDecimal change =
                 to.subtract(from).divide(from, java.math.MathContext.DECIMAL64).multiply(BigDecimal.valueOf(100));
         String sign = change.signum() > 0 ? "+" : "";
-        return sign + show(change, scaleFor(List.of(change), List.of()));
+        return sign + precisionFor(List.of(change), List.of()).show(change);
     }
 
     /**
@@ -303,8 +336,8 @@ public class TechnicalContextBuilder {
      * that printed them equal would produce a row contradicting its own colour label (Codex P2
      * on PR #87 — {@code ha_open 1.001} / {@code ha_close 1.004} both became {@code 1.00}).
      */
-    private static int barScale(List<BigDecimal[]> openClosePairs, List<BigDecimal> allValues) {
-        return scaleFor(allValues, openClosePairs);
+    private static Precision barScale(List<BigDecimal[]> openClosePairs, List<BigDecimal> allValues) {
+        return precisionFor(allValues, openClosePairs);
     }
 
     private static List<String> haRows(List<HABar> bars) {
@@ -317,17 +350,17 @@ public class TechnicalContextBuilder {
             values.add(b.haClose());
             pairs.add(new BigDecimal[] {b.haOpen(), b.haClose()});
         }
-        int scale = barScale(pairs, values);
+        Precision precision = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  ha_open  ha_high  ha_low  ha_close  colour");
         for (HABar b : bars) {
             rows.add("%s  %s  %s  %s  %s  %s"
                     .formatted(
                             b.barTime(),
-                            show(b.haOpen(), scale),
-                            show(b.haHigh(), scale),
-                            show(b.haLow(), scale),
-                            show(b.haClose(), scale),
+                            precision.show(b.haOpen()),
+                            precision.show(b.haHigh()),
+                            precision.show(b.haLow()),
+                            precision.show(b.haClose()),
                             colourOf(b)));
         }
         return rows;
@@ -345,17 +378,17 @@ public class TechnicalContextBuilder {
             // from would still misrepresent the bar's direction.
             pairs.add(new BigDecimal[] {b.open(), b.close()});
         }
-        int scale = barScale(pairs, values);
+        Precision precision = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  open  high  low  close");
         for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
             rows.add("%s  %s  %s  %s  %s"
                     .formatted(
                             b.barTime(),
-                            show(b.open(), scale),
-                            show(b.high(), scale),
-                            show(b.low(), scale),
-                            show(b.close(), scale)));
+                            precision.show(b.open()),
+                            precision.show(b.high()),
+                            precision.show(b.low()),
+                            precision.show(b.close())));
         }
         return rows;
     }
@@ -422,15 +455,15 @@ public class TechnicalContextBuilder {
         for (int i = 1; i < path.size(); i++) {
             adjacent.add(new BigDecimal[] {path.get(i - 1), path.get(i)});
         }
-        int scale = scaleFor(path, adjacent);
-        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(show(latest, scale));
+        Precision precision = precisionFor(path, adjacent);
+        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(precision.show(latest));
         if (path.size() > 1) {
             line.append("  [");
             for (int i = 0; i < path.size(); i++) {
                 if (i > 0) {
                     line.append(", ");
                 }
-                line.append(show(path.get(i), scale));
+                line.append(precision.show(path.get(i)));
             }
             line.append("]");
         }
