@@ -587,12 +587,6 @@ class BedrockAiAnalystTest {
         return new TechnicalContextBuilder(config);
     }
 
-    /**
-     * {@code bars} synthetic HA bars ending at the event bar — the window the caller resolved
-     * and drew the chart from. HA closes ramp 101..(100+bars) while the opens trail them, so
-     * every bar is green and the last three closes are deterministic for the HA-close
-     * assertion above.
-     */
     /** A single HA bar at the event bar time, for precision assertions. */
     private static HABar barWith(String open, String high, String low, String close) {
         return new HABar(
@@ -606,6 +600,12 @@ class BedrockAiAnalystTest {
                 EVENT.detectedAt());
     }
 
+    /**
+     * {@code bars} synthetic HA bars ending at the event bar — the window the caller resolved
+     * and drew the chart from. HA closes ramp 101..(100+bars) while the opens trail them, so
+     * every bar is green and the last three closes are deterministic for the HA-close
+     * assertion above.
+     */
     private static List<HABar> haBars(int bars) {
         List<HABar> window = new java.util.ArrayList<>(bars);
         for (int i = 1; i <= bars; i++) {
