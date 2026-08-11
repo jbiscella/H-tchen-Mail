@@ -107,17 +107,23 @@ public class BedrockAiAnalyst implements AiAnalyst {
     private final BedrockRuntimeClient client;
     private final BedrockConfig config;
     private final MarketDataProvider provider;
+    private final TechnicalContextBuilder technicalContext;
 
-    public BedrockAiAnalyst(BedrockRuntimeClient client, BedrockConfig config, MarketDataProvider provider) {
+    public BedrockAiAnalyst(
+            BedrockRuntimeClient client,
+            BedrockConfig config,
+            MarketDataProvider provider,
+            TechnicalContextBuilder technicalContext) {
         this.client = client;
         this.config = config;
         this.provider = provider;
+        this.technicalContext = technicalContext;
     }
 
     @Override
-    public AiAnalysis analyze(PatternEvent event) {
+    public AiAnalysis analyze(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         try {
-            return runLoop(buildUserMessage(event), event.timeframe());
+            return runLoop(buildUserMessage(event, bars), event.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -126,9 +132,28 @@ public class BedrockAiAnalyst implements AiAnalyst {
     }
 
     @Override
-    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         try {
-            return runLoop(buildUserMessage(alert), alert.timeframe());
+            return runLoop(
+                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, strategy, bars)),
+                    alert.timeframe());
+        } catch (LLMException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new LLMException("Bedrock invocation failed", e);
+        }
+    }
+
+    @Override
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        try {
+            return runLoop(
+                    buildUserMessage(alert, () -> technicalContext.forStrategyAlert(alert, bars)), alert.timeframe());
         } catch (LLMException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -185,7 +210,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
         return b.build();
     }
 
-    private Message buildUserMessage(PatternEvent event) {
+    private Message buildUserMessage(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         String prompt = "Pattern detected:\n"
                 + "  instrument: " + event.ticker() + " on " + event.exchange() + "\n"
                 + "  timeframe: " + event.timeframe().wire() + "\n"
@@ -200,6 +225,7 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 + ", high=" + event.barSnapshot().high()
                 + ", low=" + event.barSnapshot().low()
                 + ", close=" + event.barSnapshot().close() + "\n"
+                + technicalContextOf(() -> technicalContext.forPatternEvent(event, bars))
                 + "Decide which tools to call, then write the note as JSON only.";
         return Message.builder()
                 .role(ConversationRole.USER)
@@ -207,7 +233,9 @@ public class BedrockAiAnalyst implements AiAnalyst {
                 .build();
     }
 
-    private Message buildUserMessage(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    private Message buildUserMessage(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.function.Supplier<String> contextSupplier) {
         StringBuilder sb = new StringBuilder();
         sb.append("Strategy alert:\n")
                 .append("  instrument: ")
@@ -232,11 +260,27 @@ public class BedrockAiAnalyst implements AiAnalyst {
                     .append(line.role())
                     .append("]\n");
         }
+        sb.append(technicalContextOf(contextSupplier));
         sb.append("Decide which tools to call, then write the note as JSON only.");
         return Message.builder()
                 .role(ConversationRole.USER)
                 .content(ContentBlock.fromText(sb.toString()))
                 .build();
+    }
+
+    /**
+     * The Block 18 technical-context block, or nothing if it cannot be built. The AI note
+     * is best-effort enrichment on an alert the user still needs: a repository hiccup while
+     * loading the chart's lookback must degrade the note's context, never cost the email.
+     */
+    private String technicalContextOf(java.util.function.Supplier<String> supplier) {
+        try {
+            String block = supplier.get();
+            return block.isEmpty() ? "" : block + "\n";
+        } catch (RuntimeException e) {
+            LOG.warn("technical_context_unavailable error={}", e.toString());
+            return "";
+        }
     }
 
     private Message buildToolResultsMessage(Message assistant, ToolCatalog catalog) {

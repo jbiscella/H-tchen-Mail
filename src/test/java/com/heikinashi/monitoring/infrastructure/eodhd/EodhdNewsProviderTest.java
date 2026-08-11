@@ -17,6 +17,58 @@ import org.junit.jupiter.api.Test;
  */
 class EodhdNewsProviderTest {
 
+    /** Block 18 entity-cardinality ceiling; high enough that the pre-existing fixtures are unaffected. */
+    private static final int MAX_ENTITIES = 6;
+
+    // --- symbolCount / entity-cardinality filter (Block 18 step 3) ---
+
+    @Test
+    void an_item_with_more_symbols_than_the_ceiling_is_dropped() {
+        String symbols = "[\"NVDA.US\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\"]"; // 7 > 6
+        String body = "[{\"title\":\"Q2 2026 earnings call summaries\",\"date\":\"2026-06-12T10:00:00+00:00\","
+                + "\"link\":\"https://a/x\",\"symbols\":" + symbols + "}]";
+
+        EodhdNewsProvider.ParseResult out = EodhdNewsProvider.parseNews(body, 5, 600, MAX_ENTITIES);
+
+        assertThat(out.headlines()).isEmpty();
+        assertThat(out.droppedMultiEntity()).isEqualTo(1);
+    }
+
+    @Test
+    void an_item_at_the_ceiling_is_kept() {
+        String symbols = "[\"NVDA.US\",\"A\",\"B\",\"C\",\"D\",\"E\"]"; // exactly 6
+        String body = "[{\"title\":\"kept\",\"date\":\"2026-06-12T10:00:00+00:00\","
+                + "\"link\":\"https://a/x\",\"symbols\":" + symbols + "}]";
+
+        EodhdNewsProvider.ParseResult out = EodhdNewsProvider.parseNews(body, 5, 600, MAX_ENTITIES);
+
+        assertThat(out.headlines()).hasSize(1);
+        assertThat(out.droppedMultiEntity()).isZero();
+    }
+
+    @Test
+    void an_item_with_no_symbols_field_is_never_dropped_by_cardinality() {
+        String body =
+                "[{\"title\":\"no symbol list\",\"date\":\"2026-06-12T10:00:00+00:00\",\"link\":\"https://a/x\"}]";
+
+        assertThat(EodhdNewsProvider.parseNews(body, 5, 600, MAX_ENTITIES).headlines())
+                .hasSize(1);
+    }
+
+    @Test
+    void a_dropped_digest_does_not_consume_a_slot_in_the_candidate_pool() {
+        String digest = "{\"title\":\"digest\",\"date\":\"2026-06-12T11:00:00+00:00\",\"link\":\"https://a/d\","
+                + "\"symbols\":[\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\"]}";
+        String single = "{\"title\":\"single\",\"date\":\"2026-06-12T10:00:00+00:00\",\"link\":\"https://a/s\","
+                + "\"symbols\":[\"NVDA.US\"]}";
+        // max=1: if the digest consumed the only slot, "single" would never be reached.
+        String body = "[" + digest + "," + single + "]";
+
+        assertThat(EodhdNewsProvider.parseNews(body, 1, 600, MAX_ENTITIES).headlines())
+                .extracting(NewsHeadline::title)
+                .containsExactly("single");
+    }
+
     // --- summarize: word-boundary truncation boundaries ---
 
     @Test
@@ -82,7 +134,8 @@ class EodhdNewsProviderTest {
     void item_missing_required_fields_is_skipped_not_fatal() {
         String body = "[{\"title\":\"no date or link\"},"
                 + "{\"title\":\"ok\",\"date\":\"2026-06-12T10:00:00+00:00\",\"link\":\"https://a/x\"}]";
-        List<NewsHeadline> out = EodhdNewsProvider.parseNews(body, 5, 600);
+        List<NewsHeadline> out =
+                EodhdNewsProvider.parseNews(body, 5, 600, MAX_ENTITIES).headlines();
         assertThat(out).hasSize(1);
         assertThat(out.get(0).title()).isEqualTo("ok");
         assertThat(out.get(0).publishedAt()).isEqualTo(Instant.parse("2026-06-12T10:00:00Z"));
@@ -92,25 +145,27 @@ class EodhdNewsProviderTest {
     @Test
     void item_with_unparsable_date_is_skipped() {
         String body = "[{\"title\":\"bad date\",\"date\":\"yesterday\",\"link\":\"https://a/x\"}]";
-        assertThat(EodhdNewsProvider.parseNews(body, 5, 600)).isEmpty();
+        assertThat(EodhdNewsProvider.parseNews(body, 5, 600, MAX_ENTITIES).headlines())
+                .isEmpty();
     }
 
     @Test
     void max_caps_the_number_of_headlines_returned() {
         String item = "{\"title\":\"t\",\"date\":\"2026-06-12T10:00:00+00:00\",\"link\":\"https://a/x\"}";
         String body = "[" + item + "," + item + "," + item + "]";
-        assertThat(EodhdNewsProvider.parseNews(body, 2, 600)).hasSize(2);
+        assertThat(EodhdNewsProvider.parseNews(body, 2, 600, MAX_ENTITIES).headlines())
+                .hasSize(2);
     }
 
     @Test
     void non_json_body_raises_schema_drift() {
-        assertThatThrownBy(() -> EodhdNewsProvider.parseNews("<html>quota page</html>", 5, 600))
+        assertThatThrownBy(() -> EodhdNewsProvider.parseNews("<html>quota page</html>", 5, 600, MAX_ENTITIES))
                 .isInstanceOf(SchemaDriftException.class);
     }
 
     @Test
     void non_array_body_raises_schema_drift() {
-        assertThatThrownBy(() -> EodhdNewsProvider.parseNews("{\"data\":[]}", 5, 600))
+        assertThatThrownBy(() -> EodhdNewsProvider.parseNews("{\"data\":[]}", 5, 600, MAX_ENTITIES))
                 .isInstanceOf(SchemaDriftException.class);
     }
 }

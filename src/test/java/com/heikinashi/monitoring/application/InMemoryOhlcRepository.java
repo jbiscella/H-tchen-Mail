@@ -18,6 +18,7 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
     private final Map<String, TreeMap<Instant, OHLCBar>> byKey = new HashMap<>();
     private final Map<String, Long> ttlByKey = new HashMap<>();
     private int readLagBars;
+    private boolean readsFail;
 
     /**
      * Simulates DynamoDB eventual consistency on {@link #findLastN}: the newest
@@ -27,6 +28,18 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
      */
     public void simulateReadLag(int bars) {
         this.readLagBars = bars;
+    }
+
+    /**
+     * Simulates a bar-store outage on {@link #findLastN}. Throws a bare
+     * {@link RuntimeException} on purpose, mirroring
+     * {@code DynamoDbOhlcRepository.findLastN}, which calls {@code client.query} without
+     * wrapping — so a real outage surfaces as a raw AWS SDK exception rather than a
+     * {@code DependencyUnavailableException}. A double that threw the domain type would let
+     * a handler that catches only the domain type pass while the production path still broke.
+     */
+    public void failReads() {
+        this.readsFail = true;
     }
 
     @Override
@@ -63,6 +76,9 @@ public final class InMemoryOhlcRepository implements OhlcRepository {
 
     @Override
     public List<OHLCBar> findLastN(String instrumentId, Timeframe tf, Instant toInclusive, int n) {
+        if (readsFail) {
+            throw new RuntimeException("simulated ohlc store outage");
+        }
         TreeMap<Instant, OHLCBar> bars = byKey.get(key(instrumentId, tf));
         if (bars == null || bars.isEmpty() || n <= 0) {
             return List.of();

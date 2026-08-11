@@ -4,11 +4,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.fundamentals.NewsHeadline;
+import com.heikinashi.monitoring.infrastructure.marketaux.MarketauxConfig;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class NewsAggregatorTest {
+
+    /**
+     * Anchored so the fixtures below (2026-05-10 … 2026-05-12) all fall inside the
+     * Block 18 date window: the D1 look-back is 7 days, so the window opens
+     * 2026-05-05. Without an aligned clock the date filter would drop every fixture
+     * and these merge/cap assertions would be testing an empty list.
+     */
+    private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-05-12T12:00:00Z"), ZoneOffset.UTC);
+
+    /** {@code MarketauxConfig} is the single {@link RecencyWindowSource} implementation. */
+    private static final RecencyWindowSource RECENCY = new MarketauxConfig();
+
+    private static NewsAggregator aggregator(List<NewsProvider> providers, NewsConfig config) {
+        return new NewsAggregator(providers, config, RECENCY, FIXED_CLOCK);
+    }
 
     private static NewsHeadline headline(String title, String isoTime, String url) {
         return new NewsHeadline(title, Instant.parse(isoTime), "src", url, "");
@@ -42,7 +60,7 @@ class NewsAggregatorTest {
     void merges_both_providers_sorted_newest_first() {
         NewsProvider a = provider("a", List.of(headline("older", "2026-05-10T00:00:00Z", "u1")), null);
         NewsProvider b = provider("b", List.of(headline("newer", "2026-05-12T00:00:00Z", "u2")), null);
-        NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a", "b"));
+        NewsAggregator agg = aggregator(List.of(a, b), config("a", "b"));
 
         List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
@@ -53,7 +71,7 @@ class NewsAggregatorTest {
     void a_failing_provider_is_dropped_not_fatal() {
         NewsProvider ok = provider("ok", List.of(headline("survives", "2026-05-12T00:00:00Z", "u1")), null);
         NewsProvider bad = provider("bad", List.of(), new RuntimeException("boom"));
-        NewsAggregator agg = new NewsAggregator(List.of(ok, bad), config("ok", "bad"));
+        NewsAggregator agg = aggregator(List.of(ok, bad), config("ok", "bad"));
 
         List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
@@ -64,7 +82,7 @@ class NewsAggregatorTest {
     void disabled_provider_is_not_queried() {
         NewsProvider a = provider("a", List.of(headline("kept", "2026-05-12T00:00:00Z", "u1")), null);
         NewsProvider b = provider("b", List.of(headline("dropped", "2026-05-13T00:00:00Z", "u2")), null);
-        NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a"));
+        NewsAggregator agg = aggregator(List.of(a, b), config("a"));
 
         List<NewsHeadline> out = agg.fetchNewsHeadlines("CFR", "SWX", 10, Timeframe.D1);
 
@@ -78,7 +96,7 @@ class NewsAggregatorTest {
                 List.of(headline("h1", "2026-05-12T00:00:00Z", "u1"), headline("h2", "2026-05-11T00:00:00Z", "u2")),
                 null);
         NewsProvider b = provider("b", List.of(headline("h3", "2026-05-10T00:00:00Z", "u3")), null);
-        NewsAggregator agg = new NewsAggregator(List.of(a, b), config("a", "b"));
+        NewsAggregator agg = aggregator(List.of(a, b), config("a", "b"));
 
         assertThat(agg.fetchNewsHeadlines("CFR", "SWX", 2, Timeframe.D1)).hasSize(2);
     }

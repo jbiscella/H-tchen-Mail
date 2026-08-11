@@ -83,6 +83,11 @@ public class StrategyRetrySteps {
         enqueuePending(retryCount, Optional.empty());
     }
 
+    @Given("the bar store is unavailable")
+    public void the_bar_store_is_unavailable() {
+        world.ohlcRepository().failReads();
+    }
+
     @Given("a strategy pending alert is queued with retry_count {int} due now carrying its trigger bar")
     public void a_strategy_pending_alert_is_queued_carrying_trigger_bar(int retryCount) {
         StrategyAlert alert = seedAlert();

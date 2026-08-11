@@ -3,6 +3,7 @@ package com.heikinashi.monitoring.infrastructure.bedrock;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,11 +12,18 @@ import com.heikinashi.monitoring.application.InMemoryMarketDataProvider;
 import com.heikinashi.monitoring.domain.AiAnalysis;
 import com.heikinashi.monitoring.domain.AiConfidence;
 import com.heikinashi.monitoring.domain.BarSnapshot;
+import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaLookbackWindow;
 import com.heikinashi.monitoring.domain.PatternEvent;
 import com.heikinashi.monitoring.domain.PatternKind;
 import com.heikinashi.monitoring.domain.PatternSubtype;
 import com.heikinashi.monitoring.domain.Timeframe;
 import com.heikinashi.monitoring.domain.error.LLMException;
+import com.heikinashi.monitoring.domain.strategy.Strategy;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlert;
+import com.heikinashi.monitoring.domain.strategy.StrategyAlertLine;
+import com.heikinashi.monitoring.domain.strategy.StrategyScenario;
+import com.heikinashi.monitoring.infrastructure.chart.ChartConfig;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -60,6 +68,21 @@ class BedrockAiAnalystTest {
                     new BigDecimal("105")),
             Instant.parse("2026-05-07T22:00:00Z"));
 
+    /** A minimal valid END_TURN payload for tests whose subject is the request, not the reply. */
+    private static final String ANALYSIS_JSON = "{\"confidence\":\"HIGH\",\"data_sources\":[]}";
+
+    /** Strategy-flow counterpart of {@link #EVENT}, for the raw-series assertions. */
+    private static final StrategyAlert STRATEGY_ALERT = new StrategyAlert(
+            "abc-123",
+            "AAPL",
+            "NASDAQ",
+            Timeframe.D1,
+            Instant.parse("2026-05-06T00:00:00Z"),
+            "demo-strategy",
+            List.of(new StrategyAlertLine(
+                    "enter long", "long_entry", Optional.empty(), Optional.empty(), Optional.empty())),
+            Instant.parse("2026-05-07T22:00:00Z"));
+
     @Test
     void single_END_TURN_response_yields_AiAnalysis() {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
@@ -68,8 +91,9 @@ class BedrockAiAnalystTest {
                 + "ratings returned — would show institutional backing\",\"confidence\":\"HIGH\","
                 + "\"data_sources\":[\"news_headlines(5)\",\"recommendations(0)\"]}"));
 
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
-        AiAnalysis result = analyst.analyze(EVENT);
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()));
+        AiAnalysis result = analyst.analyze(EVENT, List.of());
         assertThat(result.confidence()).isEqualTo(AiConfidence.HIGH);
         assertThat(result.corroborating()).contains("strong earnings");
         verify(client, times(1)).converse(any(ConverseRequest.class));
@@ -87,8 +111,9 @@ class BedrockAiAnalystTest {
                         "exchange", Document.fromString("NASDAQ")))));
         scripted.next(endTurnWithText("{\"confidence\":\"MEDIUM\",\"data_sources\":[\"quote_info(1)\"]}"));
 
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
-        AiAnalysis result = analyst.analyze(EVENT);
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()));
+        AiAnalysis result = analyst.analyze(EVENT, List.of());
         assertThat(result.confidence()).isEqualTo(AiConfidence.MEDIUM);
         verify(client, times(2)).converse(any(ConverseRequest.class));
     }
@@ -104,8 +129,9 @@ class BedrockAiAnalystTest {
         ScriptedClient scripted = new ScriptedClient(client);
         scripted.next(endTurnWithText("{\"confidence\":\"LOW\",\"data_sources\":[]}"));
 
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
-        analyst.analyze(EVENT);
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()));
+        analyst.analyze(EVENT, List.of());
 
         ArgumentCaptor<ConverseRequest> captor = ArgumentCaptor.forClass(ConverseRequest.class);
         verify(client).converse(captor.capture());
@@ -127,8 +153,9 @@ class BedrockAiAnalystTest {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
         ScriptedClient scripted = new ScriptedClient(client);
         scripted.next(stopWith(StopReason.MAX_TOKENS, "{}"));
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
-        assertThatThrownBy(() -> analyst.analyze(EVENT))
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()));
+        assertThatThrownBy(() -> analyst.analyze(EVENT, List.of()))
                 .isInstanceOf(LLMException.class)
                 .hasMessageContaining("MAX_TOKENS");
     }
@@ -152,8 +179,9 @@ class BedrockAiAnalystTest {
                         "exchange", Document.fromString("NASDAQ")))));
         scripted.next(endTurnWithText("{\"confidence\":\"LOW\",\"data_sources\":[]}"));
 
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(2), new InMemoryMarketDataProvider());
-        AiAnalysis result = analyst.analyze(EVENT);
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(2), new InMemoryMarketDataProvider(), context(chartConfig()));
+        AiAnalysis result = analyst.analyze(EVENT, List.of());
         assertThat(result.confidence()).isEqualTo(AiConfidence.LOW);
         verify(client, times(3)).converse(any(ConverseRequest.class));
     }
@@ -163,8 +191,343 @@ class BedrockAiAnalystTest {
         BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
         ScriptedClient scripted = new ScriptedClient(client);
         scripted.next(endTurnWithText("this is not json"));
-        BedrockAiAnalyst analyst = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider());
-        assertThatThrownBy(() -> analyst.analyze(EVENT)).isInstanceOf(LLMException.class);
+        BedrockAiAnalyst analyst = new BedrockAiAnalyst(
+                client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()));
+        assertThatThrownBy(() -> analyst.analyze(EVENT, List.of())).isInstanceOf(LLMException.class);
+    }
+
+    // -------- Block 18: technical-context block ------------------------------
+
+    @Test
+    void the_user_message_carries_the_charts_lookback_series() {
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, haBars(30));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("Chart context");
+        assertThat(user).contains("30 Heikin-Ashi bars on 1d");
+        assertThat(user).contains("ha_open  ha_high  ha_low  ha_close  colour");
+        // The alert bar's raw OHLC still comes from the event snapshot.
+        assertThat(user).contains("OHLC values: open=100");
+    }
+
+    @Test
+    void the_serialized_indicators_match_the_charts_resolved_set() {
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, haBars(30));
+
+        String user = capturedUserText(client);
+        // ChartConfig defaults: sma-period 10, ema-period 20, show-rsi true, rsi-period 14.
+        assertThat(user).contains("SMA(10) = ");
+        assertThat(user).contains("EMA(20) = ");
+        assertThat(user).contains("RSI(14) = ");
+    }
+
+    @Test
+    void an_indicator_disabled_in_config_appears_in_neither_chart_nor_message() {
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(0); // disables the SMA overlay
+        config.setShowRsi(false); // disables the RSI sub-pane
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, haBars(30));
+
+        String user = capturedUserText(client);
+        assertThat(user).doesNotContain("SMA(");
+        assertThat(user).doesNotContain("RSI(");
+        assertThat(user).contains("EMA(20) = ");
+    }
+
+    @Test
+    void an_indicator_whose_period_exceeds_the_window_is_omitted() {
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setEmaPeriod(200); // the renderer skips this overlay on a 30-bar window
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, haBars(30));
+
+        // Pins the observable outcome — an overlay the chart does not draw is not described
+        // — rather than one mechanism. Mutation testing showed the omission is enforced at
+        // three independent layers: the explicit minBars skip, the path floor in line(),
+        // and dsl-eval raising a warmup error which valueAt() swallows. Disabling the skip
+        // alone does not make this fail, which is defence in depth rather than dead
+        // coverage: the assertion still fails if all three were to break.
+        assertThat(capturedUserText(client)).doesNotContain("EMA(200)");
+    }
+
+    @Test
+    void indicator_values_are_computed_over_the_ha_closes_of_the_window() {
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(3);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        // The last three bars carry ha_close 128, 129, 130, so SMA(3) is 129.
+        //
+        // Note this pins the arithmetic and the window, NOT the choice of ha_close over
+        // raw close: the builder reads HABar, which has no raw close, so there is no
+        // alternative basis for a test to distinguish. That the values match the drawn
+        // overlays follows structurally from mapping ha_close into the close slot before
+        // evaluation (see TechnicalContextBuilder) — it is not observable here.
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, haBars(30));
+
+        assertThat(capturedUserText(client)).contains("SMA(3) = 129");
+    }
+
+    @Test
+    void a_context_failure_degrades_the_note_but_never_the_alert() {
+        // The builder is mocked here rather than fed a broken repository: since Block 18 it
+        // holds no repository at all, so "the store is down" is no longer expressible at this
+        // seam — it moved to the application layer, where the window is resolved (see the
+        // pattern-flow degradation scenario in alert_dispatch.feature). What remains testable
+        // here, and worth pinning, is the analyst's own guard: a context builder that throws
+        // must cost the note its context block and nothing more.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        TechnicalContextBuilder exploding = Mockito.mock(TechnicalContextBuilder.class);
+        when(exploding.forPatternEvent(any(), any())).thenThrow(new IllegalStateException("context down"));
+
+        AiAnalysis result = new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), exploding)
+                .analyze(EVENT, haBars(30));
+
+        assertThat(result.confidence()).isEqualTo(AiConfidence.HIGH);
+        assertThat(capturedUserText(client)).doesNotContain("Chart context");
+    }
+
+    // --- Codex PR #86 review fixes ---------------------------------------------
+
+    @Test
+    void an_indicator_whose_period_equals_the_window_is_still_evaluated() {
+        // Codex P2: `from = max(minBars, size - PATH_POINTS)` made the loop run zero times
+        // when the window was exactly minBars, so SMA(30) on a 30-bar lookback appeared on
+        // the chart (which accepts bars == minBars) but not in the note.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(30);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, haBars(30));
+
+        assertThat(capturedUserText(client)).contains("SMA(30) = ");
+    }
+
+    @Test
+    void the_triggering_bar_is_restored_when_retention_removed_it() {
+        // Codex P2: under SNAPSHOT_ONLY a retried alert's HA bar may be gone. The chart
+        // repairs it from the event snapshot; the context must agree, or the two disagree
+        // about whether the alert bar exists.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        // Resolve the window the way the application services do, over an EMPTY HA repository:
+        // retention removed everything, including the alert bar, so forEvent must synthesize
+        // the triggering candle from the event snapshot. Passing List.of() here instead would
+        // test a different thing entirely — "the caller had no bars" rather than "retention
+        // evicted the bar and the repair covered it".
+        List<HABar> repaired =
+                HaLookbackWindow.forEvent(new com.heikinashi.monitoring.application.InMemoryHaRepository(), EVENT, 30);
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, repaired);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("Chart context");
+        assertThat(user).contains("1 Heikin-Ashi bars");
+        assertThat(user).contains(EVENT.barTime().toString());
+    }
+
+    @Test
+    void a_strategy_alert_uses_the_raw_ohlc_series_not_the_ha_series() {
+        // Codex P1: the strategy chart is a RAW OHLC chart with PriceSource.CLOSE
+        // indicators, so serving this flow from the HA series printed values disagreeing
+        // with both the chart and the condition that fired.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        // An HA repository that would answer with different numbers if it were consulted.
+        TechnicalContextBuilder context = context(chartConfig());
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context)
+                .analyze(STRATEGY_ALERT, rawBars(30));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("raw OHLC bars");
+        assertThat(user).contains("bar_time  open  high  low  close");
+        assertThat(user).doesNotContain("ha_close");
+    }
+
+    @Test
+    void a_strategy_alert_derives_indicators_from_the_passed_strategy_not_a_lookup() {
+        // Codex P2: re-looking-up the strategy by instrument id let a re-import between
+        // dispatch and this call swap it, so the note could describe indicators the attached
+        // chart does not draw. The strategy is now a parameter and the builder holds no
+        // repository, so the note and the chart describe the same instance by construction.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        Strategy passed = new Strategy(
+                "passed-strategy",
+                List.of(new StrategyScenario(
+                        "enter long",
+                        "long_entry",
+                        List.of("rsi(20) is below 30"),
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.empty())));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(STRATEGY_ALERT, passed, rawBars(40));
+
+        assertThat(capturedUserText(client)).contains("RSI(20) = ");
+    }
+
+    @Test
+    void the_degraded_overload_reports_the_series_without_indicators() {
+        // Strategy deleted since detection: the send is already chart-degraded, so the note
+        // carries price action but must not invent an indicator set.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(STRATEGY_ALERT, rawBars(1));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("raw OHLC bars");
+        assertThat(user).doesNotContain("Indicator values");
+    }
+
+    @Test
+    void a_strategy_alert_describes_the_bar_window_the_caller_charted() {
+        // Codex P2: the note used to re-read the window from OhlcRepository. That is not the
+        // list the chart was drawn from — MonitoringRunService merges freshly-ingested bars
+        // over a read that can lag its own write, and the retry poller splices back a trigger
+        // bar retention evicted. Neither repair is reproducible by reading again, so the
+        // caller's window is now passed in and is the only series described.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(
+                        client,
+                        configWithCap(8),
+                        new InMemoryMarketDataProvider(),
+                        // No OHLC repository exists on the builder at all, so a re-read is not
+                        // merely discouraged — it is unrepresentable.
+                        context(chartConfig()))
+                .analyze(STRATEGY_ALERT, rawBars(3));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("3 raw OHLC bars");
+        assertThat(user).contains(STRATEGY_ALERT.barTime().toString());
+    }
+
+    @Test
+    void indicators_beyond_the_charts_eight_subplot_slots_are_not_described() {
+        // Codex P2: StrategyChartSpec.placeIndicators has eight subplot slots, so a ninth
+        // oscillator is silently not drawn. The note honoured the window-skip rule but not
+        // the cap, so it would have described a pane absent from the attached image.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        // Nine distinct RSI periods => nine sub-pane indicators, in first-seen order.
+        List<StrategyScenario> scenarios = new java.util.ArrayList<>();
+        for (int period = 5; period <= 13; period++) {
+            scenarios.add(new StrategyScenario(
+                    "enter long " + period,
+                    "long_entry",
+                    List.of("rsi(" + period + ") is below 30"),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty()));
+        }
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(STRATEGY_ALERT, new Strategy("nine-oscillators", List.copyOf(scenarios)), rawBars(40));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("RSI(5) = ");
+        assertThat(user).contains("RSI(12) = ");
+        // The ninth in first-seen order has no slot left, so the chart never draws it.
+        assertThat(user).doesNotContain("RSI(13)");
+    }
+
+    /**
+     * A raw OHLC window of {@code bars} bars ending at the strategy alert bar, closes ramping
+     * 201..(200+bars). Stands in for the list the caller charted and now hands to the analyst.
+     */
+    private static List<com.heikinashi.monitoring.domain.OHLCBar> rawBars(int bars) {
+        List<com.heikinashi.monitoring.domain.OHLCBar> window = new java.util.ArrayList<>(bars);
+        for (int i = 1; i <= bars; i++) {
+            BigDecimal close = new BigDecimal(200 + i);
+            window.add(new com.heikinashi.monitoring.domain.OHLCBar(
+                    STRATEGY_ALERT.instrumentId(),
+                    STRATEGY_ALERT.timeframe(),
+                    STRATEGY_ALERT.barTime().minusSeconds((long) (bars - i) * 86400L),
+                    close.subtract(BigDecimal.ONE),
+                    close.add(BigDecimal.ONE),
+                    close.subtract(BigDecimal.ONE),
+                    close,
+                    Optional.empty(),
+                    "test",
+                    EVENT.detectedAt()));
+        }
+        return List.copyOf(window);
+    }
+
+    /** The USER-role text of the first captured request. */
+    private static String capturedUserText(BedrockRuntimeClient client) {
+        ArgumentCaptor<ConverseRequest> captor = ArgumentCaptor.forClass(ConverseRequest.class);
+        verify(client, atLeastOnce()).converse(captor.capture());
+        return captor.getAllValues().get(0).messages().get(0).content().get(0).text();
+    }
+
+    private static ChartConfig chartConfig() {
+        return new ChartConfig();
+    }
+
+    /**
+     * The context builder. It holds no repository at all since Block 18 — the bar window is
+     * passed to {@code analyze}, so a test controls the described series by choosing what it
+     * hands over, not by seeding a store.
+     */
+    private static TechnicalContextBuilder context(ChartConfig config) {
+        return new TechnicalContextBuilder(config);
+    }
+
+    /**
+     * {@code bars} synthetic HA bars ending at the event bar — the window the caller resolved
+     * and drew the chart from. HA closes ramp 101..(100+bars) while the opens trail them, so
+     * every bar is green and the last three closes are deterministic for the HA-close
+     * assertion above.
+     */
+    private static List<HABar> haBars(int bars) {
+        List<HABar> window = new java.util.ArrayList<>(bars);
+        for (int i = 1; i <= bars; i++) {
+            BigDecimal close = new BigDecimal(100 + i);
+            BigDecimal open = close.subtract(BigDecimal.ONE);
+            window.add(new HABar(
+                    EVENT.instrumentId(),
+                    EVENT.timeframe(),
+                    EVENT.barTime().minusSeconds((long) (bars - i) * 86400L),
+                    open,
+                    close,
+                    open,
+                    close,
+                    EVENT.detectedAt()));
+        }
+        return List.copyOf(window);
     }
 
     // -------- helpers --------------------------------------------------------

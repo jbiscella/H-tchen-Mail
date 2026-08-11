@@ -47,6 +47,18 @@ Feature: SI-3c.3 — Strategy alert retry
     Then a degraded strategy email is sent without a chart
     And the strategy pending alert is deleted
 
+  # Block 18 regression guard. Sharing one bar window between the chart and the AI note
+  # moved the read ahead of the strategy check, so this path — which never read bars at
+  # all before — started aborting the whole batch on a transient store failure, losing
+  # the degraded send it exists to produce.
+  Scenario: A missing strategy and an unavailable bar store still degrade rather than abort
+    Given no strategy is persisted for the instrument
+    And a strategy pending alert is queued with retry_count 2 due now
+    And the bar store is unavailable
+    When the strategy retry poller runs
+    Then a degraded strategy email is sent without a chart
+    And the strategy pending alert is deleted
+
   Scenario: A mail outage on retry is recorded against the email component, not AI
     Given a strategy is persisted for the instrument
     And a strategy pending alert is queued with retry_count 0 due now

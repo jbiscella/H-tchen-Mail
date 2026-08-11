@@ -1659,10 +1659,18 @@ Pattern detected:
   bar_time: <ISO date>
   pattern: <pattern> / <subtype>
   HA values: ha_open=..., ha_close=..., ha_high=..., ha_low=...
-  OHLC values: open=..., close=..., volume=...
+  OHLC values: open=..., high=..., low=..., close=...
 
 Decide which tools to call, then write the note as JSON only.
 ```
+
+> **Superseded by Block 18 (Part A).** The USER message above is the pre-Block-18
+> shape and carries only the single alert bar. Block 18 adds the chart's lookback
+> series and its resolved indicator set to both this message and the
+> `StrategyAlert` variant (which today carries no bar values at all). It also
+> corrects a drift in this block: the `OHLC values` line previously listed
+> `open, close, volume`, whereas the code sends `open, high, low, close` and no
+> volume.
 
 Required JSON output schema:
 
@@ -2855,9 +2863,9 @@ Feature: Monitor an imported strategy, stateless
 
 - Carrying EODHD `sentiment` scores into the domain (`NewsHeadline` has no field for it; adding one touches domain + email + tool serialization).
 - Replacing or disabling Marketaux / Yahoo RSS.
-- Any client-side relevance heuristic (title match, symbols cap, position rules) — explicitly rejected after sample evaluation.
+- Any client-side relevance heuristic (title match, symbols cap, position rules) — explicitly rejected after sample evaluation. **(Reversed in Block 18 on 15-email evidence — the symbols cap is adopted there as an entity-cardinality filter; title *match* remains rejected.)**
 - A dedicated pre-filter LLM call.
-- Changing TOP_N or the aggregator dedup rules.
+- Changing TOP_N or the aggregator dedup rules. **(TOP_N's role changed in Block 18: it becomes a post-filter cap over an over-fetched candidate pool. Dedup rules remain unchanged.)**
 - Cross-provider dedup scenario: redundant with existing URL-dedup coverage.
 
 ### Endpoint
@@ -2985,6 +2993,609 @@ Wording is delegated; the three behaviours above are the contract. The existing 
 
 ---
 
+## Block 18 — Confidence inputs: chart-series context + news candidate pool
+
+**Supersedes:** Block 17's `Out of scope` bullets "Any client-side relevance
+heuristic (title match, symbols cap, position rules) — explicitly rejected after
+sample evaluation" and "Changing TOP_N or the aggregator dedup rules". Both are
+**reversed here on new evidence**: Block 17 rejected client-side filtering after
+evaluating 3 live EODHD samples, on the reasoning that AI-side triage would
+suffice. A 15-email real-alert study (below) shows AI-side triage cannot suffice,
+because the `TOP_N` cap is applied *before* any relevance assessment and
+routinely spends the entire candidate budget on incidentally-tagged items — the
+model triages them away correctly and is then left with nothing. This block also
+**closes Block 17's deferred `Verification mode`** ("real-world triage quality
+will be assessed in a future follow-up session with actual alert emails
+attached") and its queued decision 4.
+
+**Goal**: As the recipient of HA alert emails, I want the AI analyst to receive
+the same price/indicator series the alert chart already draws, and a news
+candidate pool that is filtered for relevance before it is capped, so that
+`FUNDAMENTAL CONFIDENCE` reflects the evidence actually available for the signal
+instead of being pinned at LOW by a starved input pipeline.
+
+### Evidence (15 real alert emails, 2026-07-20 → 2026-07-31)
+
+Sample: `AMS.BME` ×5, `CFR.SWX` ×5 (4×`1d`, 1×`1w`), `NVDA.NASDAQ` ×4,
+`GAW.LSE` ×1. Grades: **14 × LOW, 1 × MEDIUM**. Every email reported
+`news_headlines(5)` with all five fundamentals tools at `(0)` — those five are
+unimplemented by design (§ "News & fundamentals provider composition"), which is
+**not** addressed in this block (see Out of scope).
+
+The one MEDIUM is a controlled comparison: same instrument, same pipeline, same
+five empty fundamentals tools. The only variable that changed was one news item
+— the Amadeus H1 2026 earnings-call summary published on the pattern-bar date
+itself, which the note used to identify a constant-currency-versus-reported
+divergence consistent with the bearish reversal. Grade moved on news quality
+alone.
+
+The 14 LOWs isolate three distinct failure modes, and the observed rule is a
+conjunction — an item must be recent **and** company-specific **and** materially
+financial to lift the grade:
+
+| Observed case | Recent | Company-specific | Material | Grade |
+|---|---|---|---|---|
+| Amadeus H1 earnings, same day as bar | yes | yes | yes | MEDIUM |
+| GreensKeeper fund letter, same day as bar | yes | no | no | LOW |
+| Amadeus–Spire product news, ~2 months old | no | yes | yes | LOW |
+| Five other companies' Q2 earnings digests carrying `NVDA` as a tag | yes | no | no | LOW |
+
+Two mechanical causes, both verified in code:
+
+1. **The candidate pool is capped before it is filtered.** `TOP_N = 5`
+   (`ToolCatalog`) is passed as `max` to *every* provider and reused as the
+   aggregator's final truncation after a pure `publishedAt` sort
+   (`NewsAggregator.fetchNewsHeadlines`). Relevance is never assessed
+   server-side; the only triage anywhere is the model's, applied to whichever 5
+   survived the recency sort. Additionally `YahooFinanceRssNewsProvider`
+   documents that the RSS feed has no date-range filter and nothing filters its
+   items afterwards, so items months older than the recency window
+   (`recencyDays1d = 7`, `recencyDays1w = 30`) enter and can fill the cap.
+2. **The analyst never receives the chart's data.** `BedrackAiAnalyst`'s
+   `buildUserMessage(PatternEvent)` sends 4 HA values, 4 OHLC values, instrument,
+   timeframe, `bar_time` and pattern name — and nothing else. The
+   `buildUserMessage(StrategyAlert)` variant sends **no bar values at all**, only
+   the strategy name and matched scenario names/roles. The rendered chart (30-bar
+   lookback, moving averages, RSI sub-pane) is produced separately for the email's
+   inline CID and never reaches the model. Consequence visible in the sample: the
+   notes reason well from exact figures (correctly reading a no-upper-shadow HA
+   candle as momentum confirmation, and a close at the exact intraday low as
+   rejection) but **hedge on context the chart already shows** — "on a stock that
+   had *presumably* been trading near the $195–$200 band", "capped near the $200
+   level, which was *likely* a psychologically significant round-number
+   resistance zone". No note in the 15 cites an RSI value, though RSI is plotted
+   in all 15.
+
+### Dependencies
+
+- `HeerwischChartRenderer` / `ChartConfig` (Block 14, Component 1) — the
+  pattern-alert chart's resolved indicator set.
+- `StrategyChartIndicators.derive(Strategy)` (Component 1b) — the strategy-alert
+  chart's resolved indicator set.
+- `BedrockAiAnalyst` SYSTEM_PROMPT and both `buildUserMessage` overloads
+  (extended, not rewritten).
+- `NewsAggregator` fan-out/dedup ordering and the per-provider `max` contract.
+- The existing `RecencyWindowSource` derivation (`recencyDays1d` / `recencyDays1w`).
+
+### Out of scope
+
+Deliberately excluded so this block stays two levers wide:
+
+- **Implementing the five empty fundamentals tools** (`get_quote_info`,
+  `get_earnings_calendar`, `get_recommendations`, `get_financials_summary`,
+  `get_insider_transactions`). Still the largest single data gap, and still
+  unaddressed; it is a separate increment with its own vendor-coverage question.
+- Sending the chart **image** to Bedrock as a multimodal content block. This
+  block sends the series numerically instead (rationale below). Revisit only
+  after measuring the numeric path.
+- Any empirical/base-rate recalibration of the confidence scale, any
+  historical-outcome joining, and any change to what `confidence` *means*.
+- A per-alert identifier (the `id` row renders `instrumentId`, so it is constant
+  across bars and timeframes for an instrument), instrumented `data_sources`
+  counts (today the field is model-authored prose and drifts — one email in the
+  sample emitted `get_`-prefixed names and the ordering varies), and same-bar
+  alert de-duplication (two NVDA emails cover the identical bar). All observed,
+  all recorded here, none fixed here.
+- `AlertEnrichment` semantics (`full` means chart+AI attached, not data coverage).
+- Any change to `NewsHeadline`, provider enablement, dedup rules, dispatch or
+  retry paths.
+
+### Part A — chart-series context in the AI user message
+
+**Principle: one source of truth.** The analyst receives *exactly* the series the
+chart for this alert draws — same lookback window, same resolved indicator list,
+same periods. It is never a hardcoded indicator set. This guarantees the note can
+never cite an indicator the reader cannot see, nor miss one they can.
+
+The indicator set is **dynamic** and differs per alert flow:
+
+| Alert flow | Resolved indicator set comes from | Set is driven by |
+|---|---|---|
+| `PatternEvent` | `HeerwischChartRenderer.addIndicators` | `monitoring.chart` config: `SMA` iff `sma-period > 0` (default 10), `EMA` iff `ema-period > 0` (default 20), `RSI(rsi-period, 70, 30)` iff `show-rsi` (default true, period 14), volume iff `show-volume` (default false) |
+| `StrategyAlert` | `StrategyChartIndicators.derive(strategy)` | the strategy's referenced indicators — `rsi`, `sma`, `ema`, `atr`, `stddev`, `macd_*`, `highest_high`/`lowest_low`/`highest_close`/`lowest_close` (RollingMax/RollingMin), plus the Tier-B `rsi_*` primitives threaded into a single RSI with their thresholds |
+
+Required behaviour:
+
+- **Extract the resolution, do not duplicate it.** The indicator list used to
+  build the `ChartSpec` and the list serialized into the user message MUST be the
+  same resolved value, obtained from the same call. A second, parallel derivation
+  in the prompt builder is a spec violation.
+- **Honour the chart's placement rules — all of them.** An indicator is described
+  only if the chart actually draws it, and *three* rules decide that, not one.
+  All three are the renderers' own:
+  1. an indicator whose minimum window exceeds the available bars is skipped
+     (heerwisch V6) — the comparison is strictly-less, so `bars == minBars` draws;
+  2. duplicates collapse by indicator identity;
+  3. non-`MAIN` indicators are placed into a **fixed set of eight subplot slots**,
+     so a ninth oscillator onward is silently not drawn.
+
+  Rule 3 was missed in the first implementation (Codex P2): a strategy referencing
+  more than eight distinct oscillators (several RSI / MACD / ATR / StdDev periods)
+  would have the note describing sub-panes absent from the image. Because the same
+  loop was already duplicated between `HeerwischChartRenderer.addIndicators` and
+  `StrategyChartSpec.placeIndicators`, the rules live in **one** shared helper —
+  `ChartIndicatorPlacement.drawn(indicators, bars)`, returning the drawn indicators
+  *with their assigned panes*, in draw order — consumed by both renderers and by the
+  context builder. A fourth re-implementation is a spec violation; adding a subplot
+  slot must change the drawn set and the described set together, by construction.
+- **Window** = the same `monitoring.chart.lookback-bars` (default 30) window as
+  the chart, loaded the same way (`HaRepository.findLastNBefore(instrumentId, tf,
+  barTime+1ns, lookbackBars)`), ending at the pattern/alert bar. (Pattern flow;
+  the strategy flow does not load its own window at all — see below.)
+- **Per-bar series — per flow, because the two charts are not the same chart.**
+  This was wrong in the first implementation and is corrected here (found by a
+  Codex review of PR #86, P1):
+
+  | Flow | Chart draws | Context series | Indicator basis |
+  |---|---|---|---|
+  | `PatternEvent` | HA candles from `HaRepository` | `HABar` window: bar time, `ha_open`/`ha_high`/`ha_low`/`ha_close`, HA colour | `ha_close` |
+  | `StrategyAlert` | **raw OHLC** from `OhlcRepository` (`StrategyChartSpec` builds `toCommonsOhlcSeries`, and `StrategyChartIndicators` uses `PriceSource.CLOSE`) | `OHLCBar` window: bar time, `open`/`high`/`low`/`close` | raw `close` |
+
+  Using the HA series for a strategy alert would print values disagreeing with
+  both the attached strategy chart *and* the DSL condition that fired the alert —
+  the exact failure this block exists to prevent. The basis follows the chart, so
+  it differs per flow rather than being uniform.
+
+  Raw OHLC for the **alert bar** in the pattern flow is unaffected — already in
+  the message via `event.barSnapshot()`, which is what let a note in the sample
+  correctly compare the raw close against the HA close.
+
+- **Missing triggering bar (pattern flow).** Under `SNAPSHOT_ONLY` retention a
+  retried alert's bar may already be deleted. The window resolution repairs that from
+  `event.barSnapshot()` so the chart still contains the triggering candle, and the
+  context sees the identical repaired list — see the invariant below, which supersedes
+  the earlier "shared helper" formulation. Sharing a helper shared the *algorithm*, not
+  the *data*: two calls to it could still return different windows (Codex P2).
+
+- **THE INVARIANT, stated once and applied to both flows.** *Whatever the note describes
+  about a rendered artefact is passed in; nothing about it is looked up.* Five review
+  rounds all reduced to one cause — this rule being rediscovered per case (the strategy
+  instance, then the strategy window, then the pattern window) instead of established
+  once. It is therefore enforced structurally: **`TechnicalContextBuilder` holds no
+  repository at all.** It cannot re-read, so it cannot disagree.
+
+  Concretely, for both flows the *caller* resolves the bar window exactly once and hands
+  the same list to the renderer and to the analyst:
+
+  | Flow | Who resolves the window | Passed to |
+  |---|---|---|
+  | `PatternEvent` | `AlertDispatchService` / `RetryPollerService`, via `HaLookbackWindow.forEvent` | `ChartRenderer.renderChart(event, bars)` **and** `AiAnalyst.analyze(event, bars)` |
+  | `StrategyAlert` | `MonitoringRunService` (fresh-bar merge) / `StrategyRetryPollerService` (trigger-bar splice) | `StrategyChartRenderer.render(alert, strategy, bars)` **and** `AiAnalyst.analyze(alert, strategy, bars)` |
+
+  **Layering, which this must not break** (no `application` class imports
+  `infrastructure`, and that holds today — verified, not assumed):
+  - `HaLookbackWindow` moves from `infrastructure.chart` to `domain`. It only ever
+    touched domain types (`HABar`, `HaRepository`, `PatternEvent`); it was in
+    infrastructure only because it was extracted from the renderer.
+  - the window size stays operator-configurable without leaking `ChartConfig` upward: a
+    `domain.ChartWindowPolicy { int lookbackBars(); }` abstraction, which `ChartConfig`
+    implements. This follows the `RecencyWindowSource` precedent (interface named where
+    it is consumed, config class as the single implementation) rather than hardcoding a
+    second copy of the default, which would silently diverge from `monitoring.chart`.
+
+- **Strategy flow: the caller passes the bar window; the analyst MUST NOT re-query
+  it.** A fresh repository read is *not* equivalent to the list the chart was drawn
+  from, because two repairs are applied upstream and neither is reproducible by
+  reading again (Codex P2):
+  - `MonitoringRunService` merges the freshly-ingested bars over the repository read
+    (`PatternDetectionService.mergedByBarTime`) because the read can lag its own
+    write. Under a lagging read, **only** the merged list contains the trigger bar —
+    which is precisely why the merge exists on the chart path.
+  - `StrategyRetryPollerService.withTriggerBar` splices the queued snapshot back in
+    when retention evicted the trigger bar before the retry ran.
+
+  The bar window therefore travels as a parameter on the `AiAnalyst` strategy
+  overloads, alongside the `Strategy`, for exactly the reason the `Strategy` does:
+  the note must describe the artefact the reader was actually sent, and re-deriving
+  either one re-opens the divergence instead of narrowing it.
+  `TechnicalContextBuilder` consequently holds **no** `OhlcRepository` — for the
+  strategy flow it is a pure function of what it is handed. A pleasant consequence:
+  the window feeding the indicators is the same `bars.size()` the chart's skip rule
+  was evaluated against, so rule 1 above cannot disagree between the two either.
+
+  Indicator values are computed over the **whole** passed window (so long-period
+  indicators are warm — the chart path loads 300 bars for this reason), while only
+  the trailing `lookback-bars` rows are **displayed**, and the block states how many
+  bars it is showing.
+
+  Note what is and is not *testable* here: with the repository removed from the
+  class, "does not re-read" is not an observable behaviour but a structural property
+  — there is no collaborator left to query. The AAA test therefore asserts the
+  positive (the passed window is the described window) rather than a negative it
+  cannot see, and the structure is what prevents the regression.
+- **Indicator values**: for each resolved indicator, its value at the alert bar
+  plus its path over the window (so direction and level are both readable — the
+  RSI-never-cited gap above is a level+direction gap).
+  - Computed via `dsl-eval`'s `org.hatrack.dsl.BarIndicatorSource.evaluate(name,
+    args)`, already on the classpath and already used for strategy evaluation —
+    **no new dependency**.
+  - `BarIndicatorSource` consumes `commons.OHLCBar` and computes over the bar
+    close, whereas the chart computes its overlays over `PriceSource.HA_CLOSE`.
+    To keep the values identical to the drawn overlays, the window is mapped to
+    `commons.OHLCBar` with **`ha_close` as the close** before evaluation. A
+    raw-close basis is explicitly rejected: it would print numbers that disagree
+    with the lines in the image beside them, which is the failure this block
+    exists to prevent.
+- **Both flows.** `buildUserMessage(StrategyAlert)` gains the same context block.
+  It currently sends no bar values whatsoever, so it is the larger relative gain;
+  a strategy alert must not remain the weaker of the two.
+*Rationale for numbers over the PNG*: the sample shows the model reasoning
+precisely from exact figures, and reading levels off a raster introduces
+estimation error on exactly the values that matter (round-number resistance, MA
+crossings, RSI thresholds), at higher token cost. The image remains available as
+a later additive step.
+
+**Spec correction (drift), applied:** the `USER` block in § Component 2 listed
+`OHLC values: open=..., close=..., volume=...`, whereas the code sends
+`open, high, low, close` and no volume. That line has been corrected in place and
+a pointer to this Part A added there.
+
+### Part B — news candidate pool: scope, over-fetch, filter, then cap
+
+Order of operations becomes **scope the query → fetch wide → filter → rank → cap
+to `TOP_N`**, replacing today's fetch-`TOP_N` → sort → cap.
+
+**Design constraint: instrument-generic.** H-tchen supports any stock on any
+supported exchange, so no step below may depend on per-instrument curated data.
+There is **no company-name matching and no per-instrument text configuration** —
+the only per-instrument input is the ticker/symbol already used to query. Every
+filter is either provider-side entity resolution or a structural property of the
+item itself. `Instrument.name` is deliberately unused: it is optional,
+operator-entered, and unreliable across exchanges, ADRs and localized names.
+
+1. **Push relevance to the provider (query-side entity scoping).** Each adapter
+   asks its provider to resolve the symbol as an *entity* rather than accepting
+   loose tag matches. Generic per provider, zero curation:
+   - **Marketaux**: add `must_have_entities=true` to the existing
+     `/v1/news/all?symbols=…&published_after=…` query, so only articles where the
+     requested symbol is an identified entity are returned. (Marketaux tracks
+     entities across its source set and links each article to its entities.)
+     `filter_entities` is deliberately **not** sent: it trims each hit's returned
+     entity array to the requested symbol, which would make every item look
+     single-entity and silently disable the step-3 cardinality filter for this
+     provider. Leaving it off keeps the full array available to count. (Settles
+     this block's implementation decision 3.)
+   - **EODHD**: the query is already symbol-scoped (`s={SYMBOL}` plus `from`/`to`).
+   - **Yahoo RSS**: already a per-ticker feed; nothing to scope.
+2. **Over-fetch.** Each provider is asked for `monitoring.news.candidate-pool`
+   items (default 30) rather than `TOP_N`. `TOP_N = 5` remains the number of
+   items handed to the model; only the candidate pool grows.
+3. **Entity-cardinality filter (the generic digest killer).** Drop any item whose
+   provider-supplied entity/symbol list exceeds
+   `monitoring.news.max-entities-per-item` (default 6). An article tagged with a
+   dozen tickers is a multi-company digest by construction; an article about one
+   company carries one or a few. This is what actually kills the observed failure
+   mode — the five other-companies' Q2 earnings digests that consumed NVDA's
+   entire candidate budget — and it needs no knowledge of *which* company.
+   - Applied **inside each provider adapter**, because the entity/symbol list
+     lives in the raw payload and is not carried on `NewsHeadline` (EODHD's
+     `symbols`/`tags`, Marketaux's `entities`; both currently parsed and
+     discarded). This keeps `NewsHeadline` unchanged, per Block 17's precedent of
+     not widening the domain record.
+   - A provider that supplies no entity list (Yahoo RSS) applies no cardinality
+     filter and is **not** penalized — the signal is optional by design.
+4. **Uniform date-window filter.** Drop any item published outside the resolved
+   `RecencyWindowSource` window for the alert's timeframe, applied centrally in
+   `NewsAggregator` — it needs only `publishedAt`, which `NewsHeadline` already
+   carries, so one implementation covers every provider including Yahoo RSS,
+   which supplies no date filter of its own. This is the filter whose absence let
+   February items reach a July bar.
+5. **Global promotional-shape filter.** Drop items matching advertorial and
+   screener-digest *title* shapes — the "X vs Y: Which Is the Better Value
+   Stock?" comparison form and numeric listicles — which the sample's notes
+   explicitly discard in 8 of 15 cases. The pattern list is **global and
+   config-driven**: one list for all instruments, never per-instrument, so it
+   scales to any stock.
+6. **Rank, then cap.** Surviving items rank by the existing recency sort; the top
+   `TOP_N` go to the model. Existing dedup (URL, normalized title within one
+   hour) runs unchanged.
+7. **Do not fail on an empty result.** If filtering removes everything, the tool
+   returns zero headlines and the model's existing "say so rather than padding"
+   instruction applies. An honest `news_headlines(0)` is the correct outcome and
+   is strictly more informative than five irrelevant items.
+
+**Where each step lives.** Steps 1 and 3 need the raw payload → provider
+adapters. Steps 4, 5 and 6 need only `NewsHeadline` → `NewsAggregator`, so they
+are written once and apply to every present and future provider.
+
+The SYSTEM_PROMPT RELEVANCE block from Block 17 stays. Server-side filtering and
+AI-side triage are complementary: the filter guarantees the model's five slots
+are spent on plausible candidates; the triage remains the final judgment.
+
+### Behaviour (Gherkin)
+
+`features/news/news_aggregation.feature` additions:
+
+```gherkin
+Scenario: The candidate pool is over-fetched, filtered, then capped to TOP_N
+  Given the candidate pool size is 30
+  And the maximum entities per item is 6
+  And the enabled news providers are "eodhd"
+  And the EODHD provider holds 30 items for "NVDA" on "NASDAQ" within the recency window
+  And 6 of them carry 2 symbols each and the rest carry 20 symbols each
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the provider was queried for 30 items
+  And 5 headlines are returned
+  And every returned headline is one of the 6 low-cardinality items
+
+Scenario: A multi-company digest is dropped on entity cardinality
+  Given the enabled news providers are "eodhd"
+  And the maximum entities per item is 6
+  And the provider returns an item titled "Q2 2026 earnings call summaries" carrying 14 symbols including "NVDA"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 0 headlines are returned
+
+Scenario: A single-company item is kept regardless of which company it is (control)
+  Given the enabled news providers are "eodhd"
+  And the maximum entities per item is 6
+  And the provider returns an item carrying 1 symbol "AMS.MC"
+  When I fetch news headlines for "AMS" on "BME" with max 5
+  Then 1 headline is returned
+
+Scenario: A provider supplying no entity list is not penalized
+  Given the enabled news providers are "yahoo-rss"
+  And the maximum entities per item is 6
+  And the Yahoo RSS provider returns an item published 2 days before the bar with no symbol list
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 1 headline is returned
+
+Scenario: The Marketaux query requests entity-resolved articles only
+  Given the enabled news providers are "marketaux"
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then the Marketaux provider was queried with must_have_entities true
+  And the Marketaux provider was not queried with filter_entities
+
+Scenario: An item outside the recency window is dropped even from a provider with no date filter
+  Given the enabled news providers are "yahoo-rss"
+  And the pattern timeframe is "1d"
+  And the Yahoo RSS provider returns an item published 60 days before the bar
+  And the Yahoo RSS provider returns an item published 2 days before the bar
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 1 headline is returned
+  And it is the item published 2 days before the bar
+
+Scenario: A promotional screener title shape is dropped
+  Given the enabled news providers are "eodhd"
+  And the global promotional patterns include the screener-comparison shape
+  And the provider returns an item titled "SIG vs CFRUY: Which Is the Better Value Stock?"
+  When I fetch news headlines for "CFR" on "SWX" with max 5
+  Then 0 headlines are returned
+
+Scenario: The promotional filter is instrument-independent
+  Given the enabled news providers are "eodhd"
+  And the global promotional patterns include the screener-comparison shape
+  And the provider returns an item titled "AAA vs BBB: Which Is the Better Value Stock?"
+  When I fetch news headlines for "GAW" on "LSE" with max 5
+  Then 0 headlines are returned
+
+Scenario: Filtering everything out yields zero headlines, not a failure
+  Given the enabled news providers are "eodhd"
+  And every item the provider returns is outside the recency window
+  When I fetch news headlines for "NVDA" on "NASDAQ" with max 5
+  Then 0 headlines are returned
+  And no error is raised
+```
+
+**Part A is verified as AAA unit tests in `BedrockAiAnalystTest`, not Cucumber.**
+There is no `features/alert/ai_analysis.feature` in this project and the analyst
+is not Cucumber-driven: `BedrockAiAnalystTest` mocks `BedrockRuntimeClient` and
+captures the `ConverseRequest`, which is the seam that can assert on the message
+actually sent. This follows Block 17's precedent for prompt-contract pinning and
+matches this block's own `Config and constraints` clause. The scenarios below are
+the behavioural specification; each maps to one AAA test over the captured
+request.
+
+```gherkin
+Scenario: The pattern-alert user message carries the chart's lookback series
+  Given the chart lookback is 30 bars
+  And a detected pattern on "NVDA" on "NASDAQ" at "1d"
+  When the AI analyst builds the user message
+  Then the message contains 30 HA bars with ha_open/ha_high/ha_low/ha_close and colour
+  And the message still carries the alert bar's raw OHLC from the event snapshot
+
+Scenario: The serialized indicators match the chart's resolved indicator set
+  Given the chart config has sma-period 10, ema-period 20 and show-rsi true
+  When the AI analyst builds the user message
+  Then the message contains SMA(10), EMA(20) and RSI(14) values at the alert bar
+
+Scenario: An indicator disabled in config appears in neither chart nor message
+  Given the chart config has sma-period 0 and show-rsi false
+  When the AI analyst builds the user message
+  Then the message contains no SMA value
+  And the message contains no RSI value
+
+Scenario: An indicator whose period exceeds the window is omitted from the message
+  Given the chart lookback is 30 bars
+  And the chart config has ema-period 200
+  When the AI analyst builds the user message
+  Then the chart omits the EMA overlay
+  And the message contains no EMA value
+
+Scenario: A strategy alert carries the strategy's derived indicators
+  Given a strategy whose conditions reference "rsi(20)" and "macd_line(12,26,9)"
+  And a strategy alert fires for "CFR" on "SWX" at "1d"
+  When the AI analyst builds the user message
+  Then the message contains the lookback series
+  And the message contains RSI(20) and MACD(12,26,9) values at the alert bar
+
+Scenario: Indicator values are computed on the HA close, matching the drawn overlays
+  Given the chart config has sma-period 10
+  And the HA closes differ from the raw closes over the window
+  When the AI analyst builds the user message
+  Then the SMA(10) value equals the mean of the last 10 HA closes
+
+Scenario: The strategy note describes the bar window the caller charted, not a re-read
+  Given the caller passes a 3-bar window ending at the alert bar
+  When the AI analyst builds the user message
+  Then the message reports 3 raw OHLC bars
+  And the message contains the alert bar's timestamp
+
+Scenario: Indicators beyond the chart's eight subplot slots are not described
+  Given a strategy referencing nine distinct oscillator periods
+  When the AI analyst builds the user message
+  Then the message describes the eight the chart draws
+  And it does not describe the ninth
+```
+
+Volume is **not** carried: `HABar` has no volume field, and the window is the HA
+series (above). The `monitoring.chart.show-volume` sub-panel is therefore outside
+Part A.
+
+### Config and constraints
+
+- New key `monitoring.news.candidate-pool` (default 30) — per-provider fetch size
+  before filtering. `TOP_N` stays 5 as the post-filter cap.
+- New key `monitoring.news.max-entities-per-item` (default 6) — the entity/symbol
+  cardinality ceiling.
+- New key for the **global** promotional-title pattern list (config-driven, not
+  compiled in, never per-instrument).
+- No new per-instrument configuration of any kind. `Instrument.name` stays unused.
+- `monitoring.chart.*` is reused unchanged as the single source of the indicator
+  set; **no new chart config keys**, and no chart-rendering behaviour changes.
+**Change boundary.** Part A cannot be delivered without touching code outside the
+news layer, so the boundary is stated explicitly rather than left to judgment.
+
+*In bounds — this block changes these:*
+
+- `HeerwischChartRenderer`: the config-driven indicator resolution is **extracted**
+  into a shared helper so the renderer and the prompt builder call the same code.
+  Pure refactor — the resolved list, pane placement, dedup, the period-exceeds-window
+  skip, and the rendered output are all unchanged.
+- `StrategyChartSpec` + `HeerwischChartRenderer`: their two copies of the identical
+  placement loop (dedup, window skip, eight subplot slots) collapse into the shared
+  `ChartIndicatorPlacement`. Pure refactor on both — same drawn set, same panes,
+  same order, same image — undertaken because the context builder is now a third
+  consumer and three copies of a rule is three chances to drift.
+- A new `TechnicalContextBuilder` (`infrastructure`), owning `HaRepository`,
+  `ChartConfig`, the shared resolver and `BarIndicatorSource`. It owns **no**
+  `OhlcRepository` and **no** `StrategyRepository`: for the strategy flow both the
+  strategy and the bar window arrive as parameters.
+- `BedrockAiAnalyst`: constructor gains the builder; both `buildUserMessage`
+  overloads emit the context block.
+- `NewsAggregator`, `EodhdNewsProvider`, `MarketauxNewsProvider`: per Part B.
+- `NewsConfig` plus the three new keys above.
+
+- **The `AiAnalyst` port and the strategy dispatch/retry paths** — boundary widened
+  mid-increment, deliberately and on request, after a Codex review of PR #86 found
+  that re-looking-up the strategy by instrument id can yield a different strategy
+  than the one that fired and was charted. `analyze` gains a strategy-bearing
+  overload, `StrategyAlertDispatchService` passes the firing strategy it already
+  holds, and `StrategyRetryPollerService` hoists its single lookup so the chart and
+  the note are drawn from the *same* `Strategy` object.
+
+  A second Codex pass extended the same argument to the **bar window**: the chart is
+  drawn from a repaired list (fresh-bar merge on the main path, trigger-bar splice on
+  retry) that a re-read cannot reproduce. So the strategy overloads carry
+  `List<OHLCBar>` too, and both call sites hand over the list they already hold —
+  `StrategyRetryPollerService` hoisting it out of `reRenderChart` for the same reason
+  it hoisted the strategy lookup.
+
+  **Sharing the window MUST NOT make degradation depend on bar storage.** Hoisting the
+  read out of `reRenderChart` moved it ahead of the `strategy.flatMap(...)` that used to
+  short-circuit it, so on the **strategy-deleted** path — which previously never read
+  bars at all — a transient failure began escaping `processOne`. `processBatch` has no
+  per-item guard, so that aborted the entire retry batch and lost the degraded send this
+  path exists to produce. Obtaining the window is therefore **best-effort**: any failure
+  degrades to an empty window, which yields a chart-degraded send and a context-free note
+  — exactly the pre-existing outcome.
+
+  The catch is `RuntimeException`, not `DependencyUnavailableException`, because
+  `DynamoDbOhlcRepository.findLastN` calls `client.query` **without wrapping**: a real
+  outage arrives as a raw AWS SDK exception, so catching only the domain type would have
+  read as a fix while leaving the actual failure mode untouched.
+
+  Recorded because it is a regression this increment introduced, and a live invariant for
+  anyone who moves that read again. Note what is *not* changed here: `processBatch` still
+  has no per-item guard, so any other per-item throw still aborts the batch. Making the
+  batch loop fault-isolating is a change to retry semantics for every failure mode and is
+  deliberately left as its own decision, not smuggled in behind this fix.
+
+  **Invariant established:** the note describes the strategy *and* the series the
+  chart was rendered from, because they are the same objects — not second derivations
+  that happen to agree. `TechnicalContextBuilder` therefore holds neither a
+  `StrategyRepository` nor an `OhlcRepository`, which removes both races rather than
+  narrowing them. Stated as a rule for future readers: **anything the note describes
+  about a rendered artefact is passed in, never looked up.**
+
+  The no-strategy overload is retained for the genuinely degraded retry case (the
+  strategy was deleted since detection, which already forces a chart-degraded
+  send): it yields the bar series with no indicators. `Optional` is not used as a
+  parameter, per §13.
+
+- **The `ChartRenderer` port and the pattern dispatch/retry paths** — boundary widened a
+  second time, on request, after the reviewer applied the invariant above to the pattern
+  flow too. Both were listed out of bounds below; the entry is moved here rather than
+  quietly deleted, because the original reason for excluding them still stands and was
+  simply outweighed.
+
+  The asymmetry that forced it: in the strategy flow the caller already held the bars, so
+  passing them cost nothing. In the pattern flow the *renderer* fetched its own window, so
+  there was no way for the analyst to receive the drawn bars without changing the port.
+  Choosing correctness over the narrower diff means `renderChart` takes the window,
+  `AlertDispatchService` / `RetryPollerService` resolve it once, and the two consumers can
+  no longer diverge — closing the whole finding class structurally instead of case by case.
+
+  Rejected alternative: having `renderChart` *return* the window it used. It would also
+  guarantee one read, but it makes the port's return type carry drawing internals and it
+  would leave the two flows with different shapes. Passing the window in matches the
+  strategy flow exactly, so there is one rule to remember rather than two.
+
+*Out of bounds — unchanged, and a reason to stop and report if pressure builds:*
+
+- Fault isolation in the retry batch loops. `processBatch` still has no per-item guard, so
+  a per-item throw other than the bar-window read still aborts the batch. Changing that
+  alters retry semantics for every failure mode and is its own decision.
+- `NewsHeadline`, `HABar`, provider enablement, dedup rules, `AlertEnrichment`.
+- Chart rendering output — no visual change to the emailed image.
+- Any new Maven dependency.
+- Prompt-contract verification follows Block 17's precedent: `BedrockAiAnalystTest`
+  pins the presence and shape of the Part A context block in the message sent to
+  Bedrock, so a regression fails CI. No attempt to unit-test the model's judgment.
+- **Verification mode**: the grade distribution is assessed against real alert
+  emails in a follow-up session, as in Block 17. Target signal: the LOW share
+  falls on days with a genuine same-day company-specific catalyst, and notes begin
+  citing indicator levels instead of hedging about them.
+
+**Decisions to settle before implementation:**
+
+1. The default value of `monitoring.news.max-entities-per-item`. 6 is a starting
+   estimate, not a measured threshold: the sample's digests carried enough tickers
+   to be unambiguous, but the true separating value between "digest" and
+   "multi-company story worth reading" is unmeasured. Log the dropped count per
+   run so the value can be tuned on evidence rather than guessed twice.
+2. Whether the global promotional-pattern list ships with a seed set derived from
+   the 15-email sample, or starts empty and is populated operationally.
+3. ~~Whether `filter_entities=true` interferes with the step-3 cardinality
+   count~~ — **SETTLED**: it does, by definition (it trims each hit's entity array
+   to the requested symbol). Only `must_have_entities=true` is sent; see Part B
+   step 1.
+
+**Queued decisions (deliberately NOT in this increment)**: the five unimplemented
+fundamentals tools; multimodal chart image; per-alert id; instrumented
+`data_sources`; same-bar alert dedup; `AlertEnrichment` coverage semantics.
+
+---
+
 ## Dependency order
 
 | Block | Supersedes | On H-tchen critical path | Depends on |
@@ -2996,6 +3607,7 @@ Wording is delegated; the three behaviours above are the contract. The existing 
 | 15 detection | Block 5 | yes | 11 |
 | 16 strategy behaviour | — | yes | 15 |
 | 17 EODHD news + triage | — | no | 13 (suffix map + token), Block 3 aggregation |
+| 18 confidence inputs | Block 17 (two `Out of scope` bullets — see its Supersedes) | no | 14 + Component 1b (chart indicator sets), 17 (news providers), Block 3 aggregation |
 
 Suggested order: 11 → 15 → 16 (unlocks the requested value at lowest risk), then 12 → 13 → 14 (consolidation, rising risk). 12/13/14 are independent of each other after 11.
 

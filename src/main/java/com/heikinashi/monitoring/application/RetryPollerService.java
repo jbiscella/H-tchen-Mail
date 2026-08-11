@@ -8,7 +8,11 @@ import com.heikinashi.monitoring.domain.AlertAuditRepository;
 import com.heikinashi.monitoring.domain.AlertEnrichment;
 import com.heikinashi.monitoring.domain.ChartImage;
 import com.heikinashi.monitoring.domain.ChartRenderer;
+import com.heikinashi.monitoring.domain.ChartWindowPolicy;
 import com.heikinashi.monitoring.domain.EmailSender;
+import com.heikinashi.monitoring.domain.HABar;
+import com.heikinashi.monitoring.domain.HaLookbackWindow;
+import com.heikinashi.monitoring.domain.HaRepository;
 import com.heikinashi.monitoring.domain.InstrumentConfig;
 import com.heikinashi.monitoring.domain.InstrumentRepository;
 import com.heikinashi.monitoring.domain.PatternEvent;
@@ -50,6 +54,8 @@ public class RetryPollerService {
 
     private final InstrumentRepository instruments;
     private final ChartRenderer chartRenderer;
+    private final HaRepository haRepository;
+    private final ChartWindowPolicy chartWindow;
     private final AiAnalyst aiAnalyst;
     private final EmailSender emailSender;
     private final PendingAlertRepository pendingAlerts;
@@ -63,6 +69,8 @@ public class RetryPollerService {
     public RetryPollerService(
             InstrumentRepository instruments,
             ChartRenderer chartRenderer,
+            HaRepository haRepository,
+            ChartWindowPolicy chartWindow,
             AiAnalyst aiAnalyst,
             EmailSender emailSender,
             PendingAlertRepository pendingAlerts,
@@ -72,6 +80,8 @@ public class RetryPollerService {
             AlertsConfig alertsConfig) {
         this.instruments = instruments;
         this.chartRenderer = chartRenderer;
+        this.haRepository = haRepository;
+        this.chartWindow = chartWindow;
         this.aiAnalyst = aiAnalyst;
         this.emailSender = emailSender;
         this.pendingAlerts = pendingAlerts;
@@ -119,9 +129,12 @@ public class RetryPollerService {
             return result;
         }
 
+        // One window, both consumers (Block 18 invariant).
+        List<HABar> bars = lookbackWindow(event);
+
         Optional<ChartImage> chart;
         try {
-            chart = Optional.of(chartRenderer.renderChart(event));
+            chart = Optional.of(chartRenderer.renderChart(event, bars));
         } catch (ChartRenderException | DependencyUnavailableException e) {
             logRetryFailure(event, "chart", e);
             chart = Optional.empty();
@@ -129,7 +142,7 @@ public class RetryPollerService {
 
         Optional<AiAnalysis> analysis;
         try {
-            analysis = Optional.of(aiAnalyst.analyze(event));
+            analysis = Optional.of(aiAnalyst.analyze(event, bars));
         } catch (LLMException | DependencyUnavailableException e) {
             logRetryFailure(event, "ai", e);
             analysis = Optional.empty();
@@ -256,5 +269,25 @@ public class RetryPollerService {
                 root == null ? "" : root.getClass().getName(),
                 root == null || root.getMessage() == null ? "" : root.getMessage(),
                 cause);
+    }
+
+    /**
+     * The HA window for this alert, resolved ONCE and handed to both the chart renderer and
+     * the AI analyst so the note cannot describe a different series than the image (Block 18
+     * invariant, CLAUDE.md). Best-effort: a store failure degrades to an empty window rather
+     * than propagating, which routes through the renderer's existing chart-failure path
+     * instead of aborting the dispatch outright.
+     */
+    private List<HABar> lookbackWindow(PatternEvent event) {
+        try {
+            return HaLookbackWindow.forEvent(haRepository, event, chartWindow.lookbackBars());
+        } catch (RuntimeException e) {
+            LOG.warn(
+                    "lookback_window_unavailable instrument_id={} bar_time={} ex={}",
+                    event.instrumentId(),
+                    event.barTime(),
+                    e.toString());
+            return List.of();
+        }
     }
 }

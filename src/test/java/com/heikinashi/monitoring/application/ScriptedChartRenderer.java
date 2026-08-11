@@ -24,7 +24,7 @@ public final class ScriptedChartRenderer implements ChartRenderer {
     }
 
     @Override
-    public ChartImage renderChart(PatternEvent event) {
+    public ChartImage renderChart(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         callCount++;
         RuntimeException next = scriptedFailures.pollFirst();
         if (next != null) {

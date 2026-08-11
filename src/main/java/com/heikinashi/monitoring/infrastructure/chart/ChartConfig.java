@@ -1,11 +1,12 @@
 package com.heikinashi.monitoring.infrastructure.chart;
 
+import com.heikinashi.monitoring.domain.ChartWindowPolicy;
 import io.micronaut.context.annotation.ConfigurationProperties;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
 @ConfigurationProperties("monitoring.chart")
-public class ChartConfig {
+public class ChartConfig implements ChartWindowPolicy {
 
     @Min(1)
     @NotNull
@@ -22,6 +23,16 @@ public class ChartConfig {
     private boolean showVolume = false;
 
     public int getLookbackBars() {
+        return lookbackBars;
+    }
+
+    /**
+     * {@link ChartWindowPolicy} view of {@link #getLookbackBars()} — the same value under the
+     * name the application layer consumes it by, so no {@code application} class needs to
+     * import this config class (Block 18).
+     */
+    @Override
+    public int lookbackBars() {
         return lookbackBars;
     }
 

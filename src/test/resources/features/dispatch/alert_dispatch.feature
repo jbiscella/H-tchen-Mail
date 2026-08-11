@@ -143,3 +143,14 @@ Feature: Block 6 — alert dispatch and retry orchestration
     When I dispatch the staged events
     And I dispatch the staged events
     Then 1 alert is pending with retry_count 0
+
+  # Block 18. The pattern flow now resolves the HA window in the application service and
+  # hands the SAME list to the chart renderer and the AI analyst, so the note cannot
+  # describe bars the image does not show. That read must not become a new way for
+  # dispatch to die: a store outage degrades the window to empty, it does not abort.
+  Scenario: An HA store outage degrades the window instead of aborting dispatch
+    Given a staged pattern event for "AAPL" on "1d" at "2026-05-06T00:00:00Z" with pattern "color_change/bullish_reversal"
+    And the HA bar store is unavailable
+    When I dispatch the staged events
+    Then the dispatch summary has sent=1, queued=0, skipped=0
+    And the email sender recorded 1 full send for 2 recipients

@@ -27,12 +27,24 @@ public final class ScriptedAiAnalyst implements AiAnalyst {
     }
 
     @Override
-    public AiAnalysis analyze(PatternEvent event) {
+    public AiAnalysis analyze(PatternEvent event, java.util.List<com.heikinashi.monitoring.domain.HABar> bars) {
         return nextAnalysis();
     }
 
     @Override
-    public AiAnalysis analyze(com.heikinashi.monitoring.domain.strategy.StrategyAlert alert) {
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            com.heikinashi.monitoring.domain.strategy.Strategy strategy,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        // Block 18: callers pass the strategy and the bar window the chart was drawn from;
+        // the scripted double answers identically either way.
+        return nextAnalysis();
+    }
+
+    @Override
+    public AiAnalysis analyze(
+            com.heikinashi.monitoring.domain.strategy.StrategyAlert alert,
+            java.util.List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
         return nextAnalysis();
     }
 
