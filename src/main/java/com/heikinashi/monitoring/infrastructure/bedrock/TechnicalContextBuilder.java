@@ -13,7 +13,10 @@ import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import org.hatrack.commons.OHLCBar;
@@ -97,6 +100,11 @@ public class TechnicalContextBuilder {
         return render(
                 "Heikin-Ashi bars",
                 haRows(bars),
+                anchorLines(
+                        bars.stream()
+                                .map(b -> new Anchor(b.barTime(), b.haClose()))
+                                .toList(),
+                        "ha_close"),
                 toHaCloseBars(bars),
                 ConfiguredChartIndicators.derive(chartConfig),
                 event.timeframe(),
@@ -138,12 +146,24 @@ public class TechnicalContextBuilder {
         // evaluated against this same size — so the two cannot disagree about what is warm.
         int shown = Math.min(bars.size(), chartConfig.getLookbackBars());
         List<com.heikinashi.monitoring.domain.OHLCBar> tail = bars.subList(bars.size() - shown, bars.size());
-        return render("raw OHLC bars", ohlcRows(tail), toRawBars(bars), indicators, alert.timeframe(), shown);
+        return render(
+                "raw OHLC bars",
+                ohlcRows(tail),
+                anchorLines(
+                        tail.stream()
+                                .map(b -> new Anchor(b.barTime(), b.close()))
+                                .toList(),
+                        "close"),
+                toRawBars(bars),
+                indicators,
+                alert.timeframe(),
+                shown);
     }
 
     private String render(
             String seriesLabel,
             List<String> rows,
+            List<String> anchors,
             List<OHLCBar> forEvaluation,
             List<Indicator> indicators,
             Timeframe tf,
@@ -160,8 +180,60 @@ public class TechnicalContextBuilder {
                 .append(tf.wire())
                 .append(", oldest first):\n");
         rows.forEach(r -> sb.append("  ").append(r).append("\n"));
+        if (!anchors.isEmpty()) {
+            sb.append("\nWindow anchors (pre-computed, so they need not be read off the rows above):\n");
+            anchors.forEach(a -> sb.append("  ").append(a).append("\n"));
+        }
         appendIndicators(sb, forEvaluation, indicators);
         return sb.toString();
+    }
+
+    /**
+     * Printed form of a value: 2 decimals. Part A.2 — the first live note drifted
+     * "roughly 52.2" out of a row reading ha_close 51.385 alongside ha_open
+     * 51.79760900267785, and full-precision BigDecimals are hostile to a model
+     * reproducing them in prose. Display only: indicators are still computed on the
+     * unrounded series, so this can never move a value.
+     */
+    private static String d2(BigDecimal v) {
+        return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** A bar reduced to what the anchors need. */
+    private record Anchor(Instant time, BigDecimal close) {}
+
+    /**
+     * The quantities the model would otherwise derive by scanning the grid — and did derive
+     * wrongly on the first live alert ("from X on 30 June", "trough near 48.4 on 23 July",
+     * "rallied ~18% from trough"). Pre-computing them is the Part A.2 lesson: labelled values
+     * survive into the note intact, grid-extracted ones drift.
+     */
+    private static List<String> anchorLines(List<Anchor> series, String closeLabel) {
+        if (series.size() < 2) {
+            return List.of();
+        }
+        Anchor first = series.get(0);
+        Anchor last = series.get(series.size() - 1);
+        Anchor low = series.stream().min(Comparator.comparing(Anchor::close)).orElseThrow();
+        Anchor high = series.stream().max(Comparator.comparing(Anchor::close)).orElseThrow();
+        List<String> lines = new ArrayList<>(5);
+        lines.add("window first %s = %s on %s".formatted(closeLabel, d2(first.close()), first.time()));
+        lines.add("lowest %s = %s on %s".formatted(closeLabel, d2(low.close()), low.time()));
+        lines.add("highest %s = %s on %s".formatted(closeLabel, d2(high.close()), high.time()));
+        lines.add("change from lowest %s to alert bar = %s%%".formatted(closeLabel, pct(low.close(), last.close())));
+        lines.add("change across window = %s%%".formatted(pct(first.close(), last.close())));
+        return lines;
+    }
+
+    /** Signed percentage change from {@code from} to {@code to}, 2 dp. */
+    private static String pct(BigDecimal from, BigDecimal to) {
+        if (from.signum() == 0) {
+            return "n/a";
+        }
+        BigDecimal change =
+                to.subtract(from).divide(from, java.math.MathContext.DECIMAL64).multiply(BigDecimal.valueOf(100));
+        String sign = change.signum() > 0 ? "+" : "";
+        return sign + d2(change);
     }
 
     private static List<String> haRows(List<HABar> bars) {
@@ -169,7 +241,8 @@ public class TechnicalContextBuilder {
         rows.add("bar_time  ha_open  ha_high  ha_low  ha_close  colour");
         for (HABar b : bars) {
             rows.add("%s  %s  %s  %s  %s  %s"
-                    .formatted(b.barTime(), b.haOpen(), b.haHigh(), b.haLow(), b.haClose(), colourOf(b)));
+                    .formatted(
+                            b.barTime(), d2(b.haOpen()), d2(b.haHigh()), d2(b.haLow()), d2(b.haClose()), colourOf(b)));
         }
         return rows;
     }
@@ -178,7 +251,8 @@ public class TechnicalContextBuilder {
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  open  high  low  close");
         for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
-            rows.add("%s  %s  %s  %s  %s".formatted(b.barTime(), b.open(), b.high(), b.low(), b.close()));
+            rows.add("%s  %s  %s  %s  %s"
+                    .formatted(b.barTime(), d2(b.open()), d2(b.high()), d2(b.low()), d2(b.close())));
         }
         return rows;
     }
@@ -237,14 +311,14 @@ public class TechnicalContextBuilder {
             return Optional.empty();
         }
         BigDecimal latest = path.get(path.size() - 1);
-        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(latest);
+        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(d2(latest));
         if (path.size() > 1) {
             line.append("  [");
             for (int i = 0; i < path.size(); i++) {
                 if (i > 0) {
                     line.append(", ");
                 }
-                line.append(path.get(i));
+                line.append(d2(path.get(i)));
             }
             line.append("]");
         }
