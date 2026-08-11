@@ -188,15 +188,67 @@ public class TechnicalContextBuilder {
         return sb.toString();
     }
 
+    /** Shortest display scale tried — price series settle here. */
+    private static final int MIN_SCALE = 2;
+
+    /** Longest display scale tried; beyond this, brevity loses to fidelity anyway. */
+    private static final int MAX_SCALE = 8;
+
     /**
-     * Printed form of a value: 2 decimals. Part A.2 — the first live note drifted
+     * Printed form of a value at a chosen scale. Part A.2 — the first live note drifted
      * "roughly 52.2" out of a row reading ha_close 51.385 alongside ha_open
-     * 51.79760900267785, and full-precision BigDecimals are hostile to a model
-     * reproducing them in prose. Display only: indicators are still computed on the
-     * unrounded series, so this can never move a value.
+     * 51.79760900267785, and full-precision BigDecimals are hostile to a model reproducing
+     * them in prose. Display only: indicators are still computed on the unrounded series, so
+     * this can never move a value.
      */
-    private static String d2(BigDecimal v) {
-        return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    private static String show(BigDecimal v, int scale) {
+        return v.setScale(scale, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /**
+     * Whether {@code scale} would flatten a non-zero value to zero — which destroys its sign.
+     * A flat 2 dp printed a MACD histogram of {@code -0.0021} as {@code -0.00} (Codex P2 on
+     * PR #87): the zero cross the alert keyed on disappears, and a negative zero misleads.
+     */
+    private static boolean flattensToZero(BigDecimal v, int scale) {
+        return v.signum() != 0 && v.setScale(scale, RoundingMode.HALF_UP).signum() == 0;
+    }
+
+    /** Whether two values that genuinely differ would display identically at {@code scale}. */
+    private static boolean collapses(BigDecimal a, BigDecimal b, int scale) {
+        return a.compareTo(b) != 0 && show(a, scale).equals(show(b, scale));
+    }
+
+    /**
+     * The smallest scale in {@code [MIN_SCALE, MAX_SCALE]} at which every value keeps its sign
+     * and no {@code mustDiffer} pair collapses. One scale per series, so columns stay aligned.
+     *
+     * <p>A fixed 2 dp was the first implementation and it is a <em>price</em>-shaped format:
+     * correct for a €57 instrument, destructive for a small-magnitude indicator or a
+     * low-priced one. Choosing the scale from the data keeps the brevity where it is safe.
+     */
+    private static int scaleFor(List<BigDecimal> values, List<BigDecimal[]> mustDiffer) {
+        for (int scale = MIN_SCALE; scale < MAX_SCALE; scale++) {
+            boolean ok = true;
+            for (BigDecimal v : values) {
+                if (flattensToZero(v, scale)) {
+                    ok = false;
+                    break;
+                }
+            }
+            for (BigDecimal[] pair : mustDiffer) {
+                if (!ok) {
+                    break;
+                }
+                if (collapses(pair[0], pair[1], scale)) {
+                    ok = false;
+                }
+            }
+            if (ok) {
+                return scale;
+            }
+        }
+        return MAX_SCALE;
     }
 
     /** A bar reduced to what the anchors need. */
@@ -216,16 +268,25 @@ public class TechnicalContextBuilder {
         Anchor last = series.get(series.size() - 1);
         Anchor low = series.stream().min(Comparator.comparing(Anchor::close)).orElseThrow();
         Anchor high = series.stream().max(Comparator.comparing(Anchor::close)).orElseThrow();
+        // Anchors are quoted as levels, so they must not collapse into each other either: a
+        // window whose low and high printed the same number would assert a flat series.
+        int scale = scaleFor(
+                series.stream().map(Anchor::close).toList(),
+                List.of(new BigDecimal[] {low.close(), high.close()}, new BigDecimal[] {first.close(), last.close()}));
         List<String> lines = new ArrayList<>(5);
-        lines.add("window first %s = %s on %s".formatted(closeLabel, d2(first.close()), first.time()));
-        lines.add("lowest %s = %s on %s".formatted(closeLabel, d2(low.close()), low.time()));
-        lines.add("highest %s = %s on %s".formatted(closeLabel, d2(high.close()), high.time()));
+        lines.add("window first %s = %s on %s".formatted(closeLabel, show(first.close(), scale), first.time()));
+        lines.add("lowest %s = %s on %s".formatted(closeLabel, show(low.close(), scale), low.time()));
+        lines.add("highest %s = %s on %s".formatted(closeLabel, show(high.close(), scale), high.time()));
         lines.add("change from lowest %s to alert bar = %s%%".formatted(closeLabel, pct(low.close(), last.close())));
         lines.add("change across window = %s%%".formatted(pct(first.close(), last.close())));
         return lines;
     }
 
-    /** Signed percentage change from {@code from} to {@code to}, 2 dp. */
+    /**
+     * Signed percentage change from {@code from} to {@code to}. Scaled so a small but non-zero
+     * move is not reported as {@code 0.00%} — a flat move and a 0.004% move are different
+     * claims about the window.
+     */
     private static String pct(BigDecimal from, BigDecimal to) {
         if (from.signum() == 0) {
             return "n/a";
@@ -233,26 +294,68 @@ public class TechnicalContextBuilder {
         BigDecimal change =
                 to.subtract(from).divide(from, java.math.MathContext.DECIMAL64).multiply(BigDecimal.valueOf(100));
         String sign = change.signum() > 0 ? "+" : "";
-        return sign + d2(change);
+        return sign + show(change, scaleFor(List.of(change), List.of()));
+    }
+
+    /**
+     * Display scale for a bar series. {@code open} vs {@code close} is the pair that must
+     * survive: {@link #colourOf} reads the candle's colour from full precision, so a scale
+     * that printed them equal would produce a row contradicting its own colour label (Codex P2
+     * on PR #87 — {@code ha_open 1.001} / {@code ha_close 1.004} both became {@code 1.00}).
+     */
+    private static int barScale(List<BigDecimal[]> openClosePairs, List<BigDecimal> allValues) {
+        return scaleFor(allValues, openClosePairs);
     }
 
     private static List<String> haRows(List<HABar> bars) {
+        List<BigDecimal> values = new ArrayList<>(bars.size() * 4);
+        List<BigDecimal[]> pairs = new ArrayList<>(bars.size());
+        for (HABar b : bars) {
+            values.add(b.haOpen());
+            values.add(b.haHigh());
+            values.add(b.haLow());
+            values.add(b.haClose());
+            pairs.add(new BigDecimal[] {b.haOpen(), b.haClose()});
+        }
+        int scale = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  ha_open  ha_high  ha_low  ha_close  colour");
         for (HABar b : bars) {
             rows.add("%s  %s  %s  %s  %s  %s"
                     .formatted(
-                            b.barTime(), d2(b.haOpen()), d2(b.haHigh()), d2(b.haLow()), d2(b.haClose()), colourOf(b)));
+                            b.barTime(),
+                            show(b.haOpen(), scale),
+                            show(b.haHigh(), scale),
+                            show(b.haLow(), scale),
+                            show(b.haClose(), scale),
+                            colourOf(b)));
         }
         return rows;
     }
 
     private static List<String> ohlcRows(List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        List<BigDecimal> values = new ArrayList<>(bars.size() * 4);
+        List<BigDecimal[]> pairs = new ArrayList<>(bars.size());
+        for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
+            values.add(b.open());
+            values.add(b.high());
+            values.add(b.low());
+            values.add(b.close());
+            // No colour label on a raw row, but an open printed equal to a close it differs
+            // from would still misrepresent the bar's direction.
+            pairs.add(new BigDecimal[] {b.open(), b.close()});
+        }
+        int scale = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  open  high  low  close");
         for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
             rows.add("%s  %s  %s  %s  %s"
-                    .formatted(b.barTime(), d2(b.open()), d2(b.high()), d2(b.low()), d2(b.close())));
+                    .formatted(
+                            b.barTime(),
+                            show(b.open(), scale),
+                            show(b.high(), scale),
+                            show(b.low(), scale),
+                            show(b.close(), scale)));
         }
         return rows;
     }
@@ -311,14 +414,23 @@ public class TechnicalContextBuilder {
             return Optional.empty();
         }
         BigDecimal latest = path.get(path.size() - 1);
-        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(d2(latest));
+        // Scale chosen from the path itself. A flat 2 dp is a price-shaped format: it printed
+        // a MACD histogram of 0.0034 / -0.0021 as 0.00 / -0.00, erasing the very zero cross a
+        // macd_* alert fires on, and it can flatten two adjacent points into one another so the
+        // path shows no direction (Codex P2 on PR #87).
+        List<BigDecimal[]> adjacent = new ArrayList<>(Math.max(0, path.size() - 1));
+        for (int i = 1; i < path.size(); i++) {
+            adjacent.add(new BigDecimal[] {path.get(i - 1), path.get(i)});
+        }
+        int scale = scaleFor(path, adjacent);
+        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(show(latest, scale));
         if (path.size() > 1) {
             line.append("  [");
             for (int i = 0; i < path.size(); i++) {
                 if (i > 0) {
                     line.append(", ");
                 }
-                line.append(d2(path.get(i)));
+                line.append(show(path.get(i), scale));
             }
             line.append("]");
         }

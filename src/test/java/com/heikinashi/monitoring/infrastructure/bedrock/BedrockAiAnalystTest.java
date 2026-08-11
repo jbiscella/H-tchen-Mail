@@ -329,6 +329,54 @@ class BedrockAiAnalystTest {
     // --- Part A.2: quotable precision (from the first live alert) --------------
 
     @Test
+    void a_low_priced_candle_never_displays_an_open_equal_to_its_close() {
+        // Codex P2 on PR #87: at a flat 2dp, ha_open 1.001 and ha_close 1.004 both print
+        // 1.00, while colourOf still calls the candle green from full precision — a row that
+        // contradicts its own colour label. The displayed scale must keep them apart.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, List.of(barWith("1.001", "1.006", "1.0005", "1.004")));
+
+        // The candle row, not the message's own "bar_time: ..." header — the colour label is
+        // what distinguishes it, and it is exactly the label the values must agree with.
+        String row = capturedUserText(client)
+                .lines()
+                .filter(l -> l.contains(EVENT.barTime().toString()) && (l.contains("green") || l.contains("red")))
+                .findFirst()
+                .orElseThrow();
+        assertThat(row).contains("1.001").contains("1.004");
+        // "green" is only truthful if the row shows a close above its open.
+        assertThat(row).contains("green");
+    }
+
+    @Test
+    void a_near_zero_indicator_keeps_the_precision_that_carries_its_sign() {
+        // Codex P2 on PR #87: a flat 2dp renders a MACD histogram of 0.0034 as 0.00 and
+        // -0.0021 as "-0.00" — the zero cross the alert keyed on vanishes, and a negative zero
+        // is worse than useless. Built from an EMA over tiny closes so the value is small.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(2);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        List<HABar> window = List.of(
+                barWith("0.0030", "0.0040", "0.0030", "0.0034"), barWith("0.0034", "0.0040", "0.0020", "0.0021"));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, window);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("SMA(2) = ");
+        // The value (0.00275) must not be flattened to zero.
+        assertThat(user).doesNotContain("SMA(2) = 0.00 ");
+        assertThat(user).doesNotContain("SMA(2) = 0.00\n");
+        assertThat(user).doesNotContain("-0.00");
+    }
+
+    @Test
     void bar_rows_are_printed_at_two_decimals() {
         // The live note wrote "ha_close ... roughly 52.2 on 30 June" against a row reading
         // ha_open 51.79760900267785 / ha_high 52 / ha_low 50.9 / ha_close 51.385 — right row,
