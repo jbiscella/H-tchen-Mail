@@ -3259,11 +3259,32 @@ both are right.
 Observed rule: **pre-computed, labelled values survive; values the model must
 extract from a grid drift.** Three changes follow from it, all display-only:
 
-1. **Round printed values to 2 decimals.** Bar rows and indicator values are
-   rendered at 2 dp. Nothing in prose needs 14 significant figures, and shorter
-   numbers are reproduced more reliably. **Indicators are still computed on the
-   full-precision series** — only the printed form is rounded, so this can never
-   move an indicator value.
+1. **Round printed values — adaptively, never to a fixed price-shaped scale.**
+   Bar rows and indicator values are shortened for display, because nothing in prose
+   needs 14 significant figures and shorter numbers are reproduced more reliably.
+   **Indicators are still computed on the full-precision series** — only the printed
+   form is rounded, so this can never move a value.
+
+   A flat 2 dp was the first implementation and it was wrong: it is a *price*-shaped
+   format applied to values that are not all price-scaled (found by a Codex review of
+   PR #87, two P2s). Two ways it destroys meaning:
+
+   | Case | At flat 2 dp | Why it matters |
+   |---|---|---|
+   | MACD histogram near a zero cross: `0.0034`, `-0.0021` | `0.00`, **`-0.00`** | the cross the alert keyed on becomes invisible, and a negative zero is actively misleading |
+   | Low-priced HA candle: `ha_open 1.001`, `ha_close 1.004` | `1.00`, `1.00` | the row shows an identical open and close while `colourOf` still labels it green from full precision — an internally contradictory context, exactly the confusion this section exists to remove |
+
+   So the printed scale is chosen **per series**, as the smallest scale in
+   `[2, 8]` that preserves the distinctions a reader depends on:
+   - a value that is non-zero must not display as zero (so sign survives);
+   - within a bar, an `open` and `close` that genuinely differ must not display
+     as equal (so the row can never contradict its own colour label);
+   - along an indicator path, adjacent points that genuinely differ must not
+     display as equal (so direction and crossings survive).
+
+   One scale per series, so columns stay aligned. Price-scaled series still land on
+   2 dp — the case that motivated the change — while small-magnitude indicators keep
+   the digits that carry their meaning.
 2. **Pre-compute the anchors the model reaches for**, as labelled lines beside the
    indicator values: window first close, window lowest close with its date, window
    highest close with its date, the change from the low to the alert bar, and the
@@ -3285,7 +3306,7 @@ Scope note: this is prose-precision only. It changes no grade, no chart, no news
 path, and no indicator arithmetic.
 
 ```gherkin
-Scenario: Bar rows are printed at two decimals
+Scenario: A price-scaled bar row is printed at two decimals
   Given an HA bar whose ha_open is 51.79760900267785
   When the technical context is built
   Then the row shows 51.80
@@ -3295,6 +3316,18 @@ Scenario: Indicator values are rounded for display but computed at full precisio
   Given a 30-bar window whose SMA(10) is 55.0830
   When the technical context is built
   Then the message shows SMA(10) = 55.08
+
+Scenario: A near-zero indicator keeps the precision that carries its sign
+  Given an indicator path containing 0.0034 and -0.0021
+  When the technical context is built
+  Then neither point displays as 0.00
+  And the negative point still displays as negative
+
+Scenario: A low-priced candle never shows an open equal to its close
+  Given an HA bar whose ha_open is 1.001 and ha_close is 1.004
+  When the technical context is built
+  Then the displayed ha_open differs from the displayed ha_close
+  And the row does not contradict its colour label
 
 Scenario: The context states the window anchors the note would otherwise derive
   Given a 30-bar window whose lowest close is 48.41 on 2026-07-23
