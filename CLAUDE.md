@@ -3904,6 +3904,133 @@ Namespace: `Monitoring/HeikinAshi`.
 
 ---
 
+## Block 19 — Web-search news provider (Tavily) + per-instrument query override
+
+> **As** an alert reader, **I want** the note to see material company news that the
+> ticker-scoped news APIs do not carry, **so that** a bullish technical signal is not
+> presented as unopposed when the company has just cut guidance.
+
+### Evidence (measured 2026-08-12, not assumed)
+
+Block 18 Part B made the news path honest: stale items are dropped and the model is
+told `news_headlines(0)` rather than handed months-old headlines. Verifying it live
+showed the filter is correct and the *supply* is the problem:
+
+| Provider | AAPL.US (control) | AMS.MC | GAW.LSE | CFR.SW |
+|---|---|---|---|---|
+| EODHD, 7-day window | **30 items, same-day** | 0 | 0 | 0 |
+| EODHD, 120-day window | — | 22 | **1** | 6 |
+| Yahoo RSS, newest item | — | 31 Jul (12d old) | 22 May (82d) | 12 Jun (61d) |
+| Marketaux | — | 0 | 0 | 0 |
+
+The AAPL control proves nothing is broken in how we ask: same token, endpoint, symbol
+format and window. These are European mid-caps with almost no English-language wire
+coverage — Games Workshop received **one** item in four months, and CFR's 120-day
+coverage is largely `SIG vs CFRUY` screener filler, the exact promotional shape Part B
+discards.
+
+**The decisive finding:** a domain-constrained web-news search for Amadeus returned
+*"2026 guidance downgraded due to Middle East…"* (5 Aug) and *"Trims FY26 Outlook"*
+(29 Jul). The live `bullish_strong` alert on the 10 Aug bar was analysed as "no news
+returned" while the company had just cut guidance — material, company-specific, and
+**contradicting** the signal. The news exists; the ticker-scoped APIs do not carry it.
+
+### Provider: Tavily
+
+`https://api.tavily.com/search`, `POST`, bearer token, `topic: "news"` so each result
+carries `published_date`. Called with the JDK `HttpClient` exactly as the Yahoo RSS
+provider is — **no new Maven dependency**. Free tier is 1000 credits/month against a
+need of roughly 120 (4 instruments, daily).
+
+Reuse note: the workspace project `ai/browser` wraps this same endpoint for agent
+research. Only the *endpoint contract* is reused — that project is Python/MCP with a
+Playwright fallback, none of which belongs in a Lambda.
+
+**Precision comes from `include_domains`**, a global list of financial-news domains,
+config-driven and never per-instrument — the same shape as the promotional-title
+patterns. Measured: unconstrained queries returned an acoustics company and a theatre
+production of *AMADEUS*; domain-constrained returned 6 of 7 genuinely relevant items.
+
+### The query, and the per-instrument override
+
+A search engine cannot be asked nothing, and the ticker alone is actively harmful:
+`AMS.MC` returned AWS landing-zone documentation, Amsterdam flight listings and
+Perplexity. So the query is derived, with an operator override:
+
+1. **Derived default** — `<name> <ticker> shares`, from the instrument's stored
+   `name`. Verified populated and correct (`Amadeus IT Group SA`, currency `EUR`), so
+   the default is expected to serve most instruments.
+2. **Override** — a new optional `news_query` attribute on the instrument `CONFIG`
+   item, used verbatim when present.
+
+**This reverses a Block 18 Part B principle, deliberately and narrowly.** Part B states
+"no company-name matching and no per-instrument text configuration… `Instrument.name`
+is deliberately unused". The distinction that makes the reversal coherent: that rule
+governs **filters** — client-side guessing about whether an item concerns the company,
+which stays rejected. A **query** is not a filter. Every relevance decision remains
+provider-side (`topic=news`, `include_domains`) or structural (the recency window, the
+promotional shapes, the entity-cardinality ceiling where a provider supplies entities).
+
+Constraints on the override: non-blank, at most 200 characters, and no per-instrument
+*filtering* rules of any kind — one string, used as the query.
+
+### Observability (a requirement, not a nicety)
+
+The override is meant to be set "when we see the instrument does not work", which needs
+a mechanism. The provider MUST log, per call, the query it sent and the titles it got
+back, so a bad query is visible in one line rather than inferred from a low count.
+Quota exhaustion logs and returns empty — a single provider failing is already
+tolerated by `NewsAggregator` and must not fail the run.
+
+### Out of scope
+
+- Any client-side relevance filter over Tavily results beyond the existing global ones.
+- Replacing EODHD / Marketaux / Yahoo. Tavily is **additive**; dedup already collapses
+  overlaps by URL and normalized title.
+- An admin command surface for setting `news_query`. The handler parses run inputs only,
+  so the field is set by a direct DynamoDB write for now.
+- Snippet-redistribution licensing: flagged for review before wide use, as with the
+  EODHD demo-data note. Not resolved here.
+
+### Behaviour (Gherkin)
+
+`features/news/tavily_news.feature`:
+
+```gherkin
+Scenario: The derived query uses the instrument name, not the bare ticker
+  Given an instrument "AMS" on "BME" named "Amadeus IT Group SA"
+  And no news_query override is configured
+  When the Tavily provider builds its query
+  Then the query contains "Amadeus IT Group SA"
+  And the query is not just "AMS.MC"
+
+Scenario: A configured news_query overrides the derived one
+  Given an instrument "AMS" on "BME" named "Amadeus IT Group SA"
+  And the news_query override is "Amadeus IT Group AMS.MC shares"
+  When the Tavily provider builds its query
+  Then the query is "Amadeus IT Group AMS.MC shares"
+
+Scenario: Results are scoped to the configured news domains
+  When the Tavily provider queries for any instrument
+  Then the request carries topic "news"
+  And the request carries the configured include_domains
+
+Scenario: Published dates are parsed so the recency window applies
+  Given Tavily returns an item published "Wed, 05 Aug 2026 11:00:00 GMT"
+  When the provider parses the response
+  Then the headline's publishedAt is 2026-08-05T11:00:00Z
+
+Scenario: Quota exhaustion yields no headlines rather than failing the run
+  Given Tavily responds 432
+  When the provider fetches headlines
+  Then 0 headlines are returned
+  And no exception escapes
+
+Scenario: The query and the returned titles are logged
+  When the Tavily provider fetches headlines
+  Then the log line carries the query sent and the titles returned
+```
+
 ## 15. Closing roadmap (final)
 
 | Block | Goal                                              | Status |
