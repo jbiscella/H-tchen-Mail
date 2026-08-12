@@ -3994,39 +3994,49 @@ tolerated by `NewsAggregator` and must not fail the run.
 
 ### Behaviour (Gherkin)
 
-`features/news/tavily_news.feature`:
+`features/news/tavily_news.feature` covers the **query**, which is the operator-facing
+half. The HTTP-shaped behaviour — `topic=news`, `include_domains`, `published_date`
+parsing, the quota codes — is pinned by AAA tests at the pure seams
+(`TavilyNewsProvider.requestBody` / `parseNews`) rather than by Cucumber, following the
+Block 18 Part A precedent: a Cucumber layer over a stubbed transport asserts against the
+stub, not the adapter. The scenarios below are the specification either way; the marker
+after each says where it is enforced.
 
 ```gherkin
-Scenario: The derived query uses the instrument name, not the bare ticker
+Scenario: The derived query uses the instrument name, not the bare ticker *(feature)*
   Given an instrument "AMS" on "BME" named "Amadeus IT Group SA"
   And no news_query override is configured
   When the Tavily provider builds its query
   Then the query contains "Amadeus IT Group SA"
   And the query is not just "AMS.MC"
 
-Scenario: A configured news_query overrides the derived one
+Scenario: A configured news_query overrides the derived one *(feature)*
   Given an instrument "AMS" on "BME" named "Amadeus IT Group SA"
   And the news_query override is "Amadeus IT Group AMS.MC shares"
   When the Tavily provider builds its query
   Then the query is "Amadeus IT Group AMS.MC shares"
 
-Scenario: Results are scoped to the configured news domains
+Scenario: Results are scoped to the configured news domains *(AAA)*
   When the Tavily provider queries for any instrument
   Then the request carries topic "news"
   And the request carries the configured include_domains
 
-Scenario: Published dates are parsed so the recency window applies
+Scenario: Published dates are parsed so the recency window applies *(AAA)*
   Given Tavily returns an item published "Wed, 05 Aug 2026 11:00:00 GMT"
   When the provider parses the response
   Then the headline's publishedAt is 2026-08-05T11:00:00Z
 
-Scenario: Quota exhaustion yields no headlines rather than failing the run
+Scenario: Quota exhaustion yields no headlines rather than failing the run *(AAA)*
   Given Tavily responds 432
   When the provider fetches headlines
   Then 0 headlines are returned
   And no exception escapes
 
-Scenario: The query and the returned titles are logged
+Scenario: The query and the returned titles are logged *(NOT automatically asserted)*
+  # This log sits after the HTTP call, so it is unreachable from the pure seams the other
+  # provider assertions use, and stubbing a transport just to observe a log line would
+  # assert against the stub. Verified by inspection and by the first live run. Recorded as
+  # a known coverage gap rather than left to look covered.
   When the Tavily provider fetches headlines
   Then the log line carries the query sent and the titles returned
 ```
