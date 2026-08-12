@@ -13,7 +13,10 @@ import com.heikinashi.monitoring.infrastructure.chart.StrategyChartIndicators;
 import com.heikinashi.monitoring.infrastructure.hatrack.CommonsBarAdapter;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import org.hatrack.commons.OHLCBar;
@@ -97,6 +100,11 @@ public class TechnicalContextBuilder {
         return render(
                 "Heikin-Ashi bars",
                 haRows(bars),
+                anchorLines(
+                        bars.stream()
+                                .map(b -> new Anchor(b.barTime(), b.haClose()))
+                                .toList(),
+                        "ha_close"),
                 toHaCloseBars(bars),
                 ConfiguredChartIndicators.derive(chartConfig),
                 event.timeframe(),
@@ -138,12 +146,24 @@ public class TechnicalContextBuilder {
         // evaluated against this same size — so the two cannot disagree about what is warm.
         int shown = Math.min(bars.size(), chartConfig.getLookbackBars());
         List<com.heikinashi.monitoring.domain.OHLCBar> tail = bars.subList(bars.size() - shown, bars.size());
-        return render("raw OHLC bars", ohlcRows(tail), toRawBars(bars), indicators, alert.timeframe(), shown);
+        return render(
+                "raw OHLC bars",
+                ohlcRows(tail),
+                anchorLines(
+                        tail.stream()
+                                .map(b -> new Anchor(b.barTime(), b.close()))
+                                .toList(),
+                        "close"),
+                toRawBars(bars),
+                indicators,
+                alert.timeframe(),
+                shown);
     }
 
     private String render(
             String seriesLabel,
             List<String> rows,
+            List<String> anchors,
             List<OHLCBar> forEvaluation,
             List<Indicator> indicators,
             Timeframe tf,
@@ -160,25 +180,215 @@ public class TechnicalContextBuilder {
                 .append(tf.wire())
                 .append(", oldest first):\n");
         rows.forEach(r -> sb.append("  ").append(r).append("\n"));
+        if (!anchors.isEmpty()) {
+            sb.append("\nWindow anchors (pre-computed, so they need not be read off the rows above):\n");
+            anchors.forEach(a -> sb.append("  ").append(a).append("\n"));
+        }
         appendIndicators(sb, forEvaluation, indicators);
         return sb.toString();
     }
 
+    /** Shortest display scale tried — price series settle here. */
+    private static final int MIN_SCALE = 2;
+
+    /** Longest fixed scale tried; past this, shortening is abandoned rather than forced. */
+    private static final int MAX_SCALE = 8;
+
+    /**
+     * How one series is printed: a fixed number of decimals, or {@code exact} when no fixed
+     * scale can shorten it without destroying a distinction.
+     *
+     * <p>The {@code exact} arm exists because a bounded search needs an answer for "the bound
+     * was exhausted". The first version returned {@code MAX_SCALE} unconditionally, so values
+     * differing only past 8 dp — {@code 0.000000004} against {@code -0.000000004} — printed
+     * identically as {@code 0.00000000} and a MACD crossing vanished again (Codex P2 on PR
+     * #87, the second finding on this formatter). Raising the cap would only move that
+     * boundary; refusing to shorten removes it. Brevity is a nicety here, fidelity is not.
+     */
+    private record Precision(int scale, boolean verbatim) {
+
+        static Precision fixed(int scale) {
+            return new Precision(scale, false);
+        }
+
+        /** Component is {@code verbatim}, not {@code exact}: a record accessor cannot share a
+         * name with a static factory. */
+        static Precision exact() {
+            return new Precision(0, true);
+        }
+
+        /**
+         * Part A.2 — the first live note drifted "roughly 52.2" out of a row reading ha_close
+         * 51.385 alongside ha_open 51.79760900267785, and full-precision BigDecimals are
+         * hostile to a model reproducing them in prose. Display only: indicators are still
+         * computed on the unrounded series, so this can never move a value.
+         *
+         * <p>{@code toPlainString} throughout, including the exact arm: {@code toString} would
+         * render a round number like 100 as {@code 1E+2}.
+         */
+        String show(BigDecimal v) {
+            return verbatim
+                    ? v.stripTrailingZeros().toPlainString()
+                    : v.setScale(scale, RoundingMode.HALF_UP).toPlainString();
+        }
+    }
+
+    /**
+     * Whether {@code scale} would flatten a non-zero value to zero — which destroys its sign.
+     * A flat 2 dp printed a MACD histogram of {@code -0.0021} as {@code -0.00} (Codex P2 on
+     * PR #87): the zero cross the alert keyed on disappears, and a negative zero misleads.
+     */
+    private static boolean flattensToZero(BigDecimal v, int scale) {
+        return v.signum() != 0 && v.setScale(scale, RoundingMode.HALF_UP).signum() == 0;
+    }
+
+    /** Whether two values that genuinely differ would display identically at {@code scale}. */
+    private static boolean collapses(BigDecimal a, BigDecimal b, int scale) {
+        return a.compareTo(b) != 0
+                && Precision.fixed(scale).show(a).equals(Precision.fixed(scale).show(b));
+    }
+
+    /**
+     * The shortest safe way to print a series: the smallest scale in
+     * {@code [MIN_SCALE, MAX_SCALE]} — the bound <b>inclusive</b> — at which every value keeps
+     * its sign and no {@code mustDiffer} pair collapses, or {@link Precision#exact()} when no
+     * such scale exists. One precision per series, so columns stay aligned.
+     *
+     * <p>A fixed 2 dp was the first implementation and it is a <em>price</em>-shaped format:
+     * correct for a €57 instrument, destructive for a small-magnitude indicator or a low-priced
+     * one. Choosing from the data keeps the brevity where it is safe and drops it where it is
+     * not — including when the whole range is unsafe, which the first bounded version silently
+     * treated as success.
+     */
+    private static Precision precisionFor(List<BigDecimal> values, List<BigDecimal[]> mustDiffer) {
+        for (int scale = MIN_SCALE; scale <= MAX_SCALE; scale++) {
+            boolean ok = true;
+            for (BigDecimal v : values) {
+                if (flattensToZero(v, scale)) {
+                    ok = false;
+                    break;
+                }
+            }
+            for (BigDecimal[] pair : mustDiffer) {
+                if (!ok) {
+                    break;
+                }
+                if (collapses(pair[0], pair[1], scale)) {
+                    ok = false;
+                }
+            }
+            if (ok) {
+                return Precision.fixed(scale);
+            }
+        }
+        return Precision.exact();
+    }
+
+    /** A bar reduced to what the anchors need. */
+    private record Anchor(Instant time, BigDecimal close) {}
+
+    /**
+     * The quantities the model would otherwise derive by scanning the grid — and did derive
+     * wrongly on the first live alert ("from X on 30 June", "trough near 48.4 on 23 July",
+     * "rallied ~18% from trough"). Pre-computing them is the Part A.2 lesson: labelled values
+     * survive into the note intact, grid-extracted ones drift.
+     */
+    private static List<String> anchorLines(List<Anchor> series, String closeLabel) {
+        if (series.size() < 2) {
+            return List.of();
+        }
+        Anchor first = series.get(0);
+        Anchor last = series.get(series.size() - 1);
+        Anchor low = series.stream().min(Comparator.comparing(Anchor::close)).orElseThrow();
+        Anchor high = series.stream().max(Comparator.comparing(Anchor::close)).orElseThrow();
+        // Anchors are quoted as levels, so they must not collapse into each other either: a
+        // window whose low and high printed the same number would assert a flat series.
+        Precision precision = precisionFor(
+                series.stream().map(Anchor::close).toList(),
+                List.of(new BigDecimal[] {low.close(), high.close()}, new BigDecimal[] {first.close(), last.close()}));
+        List<String> lines = new ArrayList<>(5);
+        lines.add("window first %s = %s on %s".formatted(closeLabel, precision.show(first.close()), first.time()));
+        lines.add("lowest %s = %s on %s".formatted(closeLabel, precision.show(low.close()), low.time()));
+        lines.add("highest %s = %s on %s".formatted(closeLabel, precision.show(high.close()), high.time()));
+        lines.add("change from lowest %s to alert bar = %s%%".formatted(closeLabel, pct(low.close(), last.close())));
+        lines.add("change across window = %s%%".formatted(pct(first.close(), last.close())));
+        return lines;
+    }
+
+    /**
+     * Signed percentage change from {@code from} to {@code to}. Scaled so a small but non-zero
+     * move is not reported as {@code 0.00%} — a flat move and a 0.004% move are different
+     * claims about the window.
+     */
+    private static String pct(BigDecimal from, BigDecimal to) {
+        if (from.signum() == 0) {
+            return "n/a";
+        }
+        BigDecimal change =
+                to.subtract(from).divide(from, java.math.MathContext.DECIMAL64).multiply(BigDecimal.valueOf(100));
+        String sign = change.signum() > 0 ? "+" : "";
+        return sign + precisionFor(List.of(change), List.of()).show(change);
+    }
+
+    /**
+     * Display scale for a bar series. {@code open} vs {@code close} is the pair that must
+     * survive: {@link #colourOf} reads the candle's colour from full precision, so a scale
+     * that printed them equal would produce a row contradicting its own colour label (Codex P2
+     * on PR #87 — {@code ha_open 1.001} / {@code ha_close 1.004} both became {@code 1.00}).
+     */
+    private static Precision barScale(List<BigDecimal[]> openClosePairs, List<BigDecimal> allValues) {
+        return precisionFor(allValues, openClosePairs);
+    }
+
     private static List<String> haRows(List<HABar> bars) {
+        List<BigDecimal> values = new ArrayList<>(bars.size() * 4);
+        List<BigDecimal[]> pairs = new ArrayList<>(bars.size());
+        for (HABar b : bars) {
+            values.add(b.haOpen());
+            values.add(b.haHigh());
+            values.add(b.haLow());
+            values.add(b.haClose());
+            pairs.add(new BigDecimal[] {b.haOpen(), b.haClose()});
+        }
+        Precision precision = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  ha_open  ha_high  ha_low  ha_close  colour");
         for (HABar b : bars) {
             rows.add("%s  %s  %s  %s  %s  %s"
-                    .formatted(b.barTime(), b.haOpen(), b.haHigh(), b.haLow(), b.haClose(), colourOf(b)));
+                    .formatted(
+                            b.barTime(),
+                            precision.show(b.haOpen()),
+                            precision.show(b.haHigh()),
+                            precision.show(b.haLow()),
+                            precision.show(b.haClose()),
+                            colourOf(b)));
         }
         return rows;
     }
 
     private static List<String> ohlcRows(List<com.heikinashi.monitoring.domain.OHLCBar> bars) {
+        List<BigDecimal> values = new ArrayList<>(bars.size() * 4);
+        List<BigDecimal[]> pairs = new ArrayList<>(bars.size());
+        for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
+            values.add(b.open());
+            values.add(b.high());
+            values.add(b.low());
+            values.add(b.close());
+            // No colour label on a raw row, but an open printed equal to a close it differs
+            // from would still misrepresent the bar's direction.
+            pairs.add(new BigDecimal[] {b.open(), b.close()});
+        }
+        Precision precision = barScale(pairs, values);
         List<String> rows = new ArrayList<>(bars.size() + 1);
         rows.add("bar_time  open  high  low  close");
         for (com.heikinashi.monitoring.domain.OHLCBar b : bars) {
-            rows.add("%s  %s  %s  %s  %s".formatted(b.barTime(), b.open(), b.high(), b.low(), b.close()));
+            rows.add("%s  %s  %s  %s  %s"
+                    .formatted(
+                            b.barTime(),
+                            precision.show(b.open()),
+                            precision.show(b.high()),
+                            precision.show(b.low()),
+                            precision.show(b.close())));
         }
         return rows;
     }
@@ -237,14 +447,23 @@ public class TechnicalContextBuilder {
             return Optional.empty();
         }
         BigDecimal latest = path.get(path.size() - 1);
-        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(latest);
+        // Scale chosen from the path itself. A flat 2 dp is a price-shaped format: it printed
+        // a MACD histogram of 0.0034 / -0.0021 as 0.00 / -0.00, erasing the very zero cross a
+        // macd_* alert fires on, and it can flatten two adjacent points into one another so the
+        // path shows no direction (Codex P2 on PR #87).
+        List<BigDecimal[]> adjacent = new ArrayList<>(Math.max(0, path.size() - 1));
+        for (int i = 1; i < path.size(); i++) {
+            adjacent.add(new BigDecimal[] {path.get(i - 1), path.get(i)});
+        }
+        Precision precision = precisionFor(path, adjacent);
+        StringBuilder line = new StringBuilder(call.label()).append(" = ").append(precision.show(latest));
         if (path.size() > 1) {
             line.append("  [");
             for (int i = 0; i < path.size(); i++) {
                 if (i > 0) {
                     line.append(", ");
                 }
-                line.append(path.get(i));
+                line.append(precision.show(path.get(i)));
             }
             line.append("]");
         }

@@ -3239,6 +3239,120 @@ Required behaviour:
 - **Both flows.** `buildUserMessage(StrategyAlert)` gains the same context block.
   It currently sends no bar values whatsoever, so it is the larger relative gain;
   a strategy alert must not remain the weaker of the two.
+#### Part A.2 — quotable precision (follow-up, measured on the first live alert)
+
+The first alert produced under Part A (`AMS.BME`, `strong_candle/bullish_strong`,
+1d, bar 2026-08-10) was verified figure-by-figure against DynamoDB. Everything the
+context block had already **computed and labelled** came out exact in the note:
+`SMA(10) = 55.08` (recomputed 55.0830), its five-point path `51.92 → 52.75 → 53.63
+→ 54.43 → 55.08`, `EMA(20) = 53.63` (SMA-seeded 53.6252), `ha_low == ha_open ==
+56.74`, the 23 July trough's `ha_close 48.41` and `ha_low 48.08`.
+
+The one wrong figure appeared exactly where the model had to **scan the bar grid
+itself**: it wrote "ha_close values sliding from roughly 52.2 on 30 June", while
+that row reads `ha_open 51.79760900267785 · ha_high 52 · ha_low 50.9 · ha_close
+51.385`. So it took the right row, drifted the digits, and attached the wrong
+measure's name. It also quoted 48.41 and 48.08 for the same day without saying one
+was the close and the other the low, which reads as self-contradictory even though
+both are right.
+
+Observed rule: **pre-computed, labelled values survive; values the model must
+extract from a grid drift.** Three changes follow from it, all display-only:
+
+1. **Round printed values — adaptively, never to a fixed price-shaped scale.**
+   Bar rows and indicator values are shortened for display, because nothing in prose
+   needs 14 significant figures and shorter numbers are reproduced more reliably.
+   **Indicators are still computed on the full-precision series** — only the printed
+   form is rounded, so this can never move a value.
+
+   A flat 2 dp was the first implementation and it was wrong: it is a *price*-shaped
+   format applied to values that are not all price-scaled (found by a Codex review of
+   PR #87, two P2s). Two ways it destroys meaning:
+
+   | Case | At flat 2 dp | Why it matters |
+   |---|---|---|
+   | MACD histogram near a zero cross: `0.0034`, `-0.0021` | `0.00`, **`-0.00`** | the cross the alert keyed on becomes invisible, and a negative zero is actively misleading |
+   | Low-priced HA candle: `ha_open 1.001`, `ha_close 1.004` | `1.00`, `1.00` | the row shows an identical open and close while `colourOf` still labels it green from full precision — an internally contradictory context, exactly the confusion this section exists to remove |
+
+   So the printed precision is chosen **per series**, as the smallest scale in
+   `[2, 8]` (bound inclusive) that preserves the distinctions a reader depends on:
+   - a value that is non-zero must not display as zero (so sign survives);
+   - within a bar, an `open` and `close` that genuinely differ must not display
+     as equal (so the row can never contradict its own colour label);
+   - along an indicator path, adjacent points that genuinely differ must not
+     display as equal (so direction and crossings survive).
+
+   **When no scale in that range works, the series is not shortened at all** — it
+   prints exactly. A bounded search needs an answer for "the bound was exhausted",
+   and the first version returned the maximum unconditionally, so values differing
+   only past 8 dp (`0.000000004` against `-0.000000004`) collapsed exactly as the
+   flat 2 dp had (Codex P2, second finding on this formatter). Raising the cap only
+   moves that boundary; refusing to shorten removes it. Brevity is a nicety here,
+   fidelity is not.
+
+   One precision per series, so columns stay aligned. Price-scaled series still land
+   on 2 dp — the case that motivated the change — while small-magnitude indicators
+   keep the digits that carry their meaning.
+2. **Pre-compute the anchors the model reaches for**, as labelled lines beside the
+   indicator values: window first close, window lowest close with its date, window
+   highest close with its date, the change from the low to the alert bar, and the
+   change across the window. These are precisely the quantities the note derived by
+   hand (`from X on 30 June`, `trough near 48.4 on 23 July`, `rallied ~18% from
+   trough`), and they are the ones that went wrong.
+3. **Require the measure to be named.** The SYSTEM_PROMPT instructs that a quoted
+   bar value names its measure and date, and that a value must not be restated
+   under another measure's name. This alone would have made the 48.41/48.08 pair
+   self-explaining.
+
+Deliberately NOT done: post-hoc numeric validation of the note against the context.
+It is the most rigorous option and the most brittle, it can only reject a note it
+cannot repair, and the authoritative figures are already in the pattern-values
+table and the chart beside the prose. Revisit only if labelled anchors fail to hold
+the error rate down.
+
+Scope note: this is prose-precision only. It changes no grade, no chart, no news
+path, and no indicator arithmetic.
+
+```gherkin
+Scenario: A price-scaled bar row is printed at two decimals
+  Given an HA bar whose ha_open is 51.79760900267785
+  When the technical context is built
+  Then the row shows 51.80
+  And it does not show 51.79760900267785
+
+Scenario: Indicator values are rounded for display but computed at full precision
+  Given a 30-bar window whose SMA(10) is 55.0830
+  When the technical context is built
+  Then the message shows SMA(10) = 55.08
+
+Scenario: A near-zero indicator keeps the precision that carries its sign
+  Given an indicator path containing 0.0034 and -0.0021
+  When the technical context is built
+  Then neither point displays as 0.00
+  And the negative point still displays as negative
+
+Scenario: Values no fixed scale can separate are printed exactly
+  Given an indicator path whose points differ only beyond eight decimal places
+  When the technical context is built
+  Then the points are printed in full rather than collapsed to a shared value
+
+Scenario: A low-priced candle never shows an open equal to its close
+  Given an HA bar whose ha_open is 1.001 and ha_close is 1.004
+  When the technical context is built
+  Then the displayed ha_open differs from the displayed ha_close
+  And the row does not contradict its colour label
+
+Scenario: The context states the window anchors the note would otherwise derive
+  Given a 30-bar window whose lowest close is 48.41 on 2026-07-23
+  When the technical context is built
+  Then the message states the lowest close with its date
+  And it states the change from that low to the alert bar
+
+Scenario: The prompt requires a quoted bar value to name its measure
+  When the AI analyst builds the request
+  Then the system prompt instructs that quoted values name their measure
+```
+
 *Rationale for numbers over the PNG*: the sample shows the model reasoning
 precisely from exact figures, and reading levels off a raster introduces
 estimation error on exactly the values that matter (round-number resistance, MA

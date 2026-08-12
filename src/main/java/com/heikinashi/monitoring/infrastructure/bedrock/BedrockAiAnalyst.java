@@ -63,6 +63,14 @@ public class BedrockAiAnalyst implements AiAnalyst {
             unacceptable as a bullet list. Only "confidence" is an enum and "data_sources" \
             an array of strings.
 
+            QUOTING NUMBERS — when you cite a bar value from the chart-context block, name \
+            the measure it comes from (ha_open / ha_high / ha_low / ha_close, or open / high \
+            / low / close) and the date it belongs to. Never restate a value under a \
+            different measure's name, and never quote a level the block does not contain: \
+            two figures for the same day are only contradictory if you fail to say which \
+            measure each one is. Prefer the pre-computed "Window anchors" lines over reading \
+            values off the bar rows yourself.
+
             RELEVANCE — treat fetched news items as candidates, not as facts about the \
             instrument: provider tagging is loose (a multi-ticker story carries every \
             symbol it merely mentions), and promotional or advertorial items (stock \

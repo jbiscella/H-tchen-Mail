@@ -326,6 +326,167 @@ class BedrockAiAnalystTest {
         assertThat(capturedUserText(client)).contains("SMA(30) = ");
     }
 
+    // --- Part A.2: quotable precision (from the first live alert) --------------
+
+    @Test
+    void a_low_priced_candle_never_displays_an_open_equal_to_its_close() {
+        // Codex P2 on PR #87: at a flat 2dp, ha_open 1.001 and ha_close 1.004 both print
+        // 1.00, while colourOf still calls the candle green from full precision — a row that
+        // contradicts its own colour label. The displayed scale must keep them apart.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, List.of(barWith("1.001", "1.006", "1.0005", "1.004")));
+
+        // The candle row, not the message's own "bar_time: ..." header — the colour label is
+        // what distinguishes it, and it is exactly the label the values must agree with.
+        String row = capturedUserText(client)
+                .lines()
+                .filter(l -> l.contains(EVENT.barTime().toString()) && (l.contains("green") || l.contains("red")))
+                .findFirst()
+                .orElseThrow();
+        assertThat(row).contains("1.001").contains("1.004");
+        // "green" is only truthful if the row shows a close above its open.
+        assertThat(row).contains("green");
+    }
+
+    @Test
+    void a_near_zero_indicator_keeps_the_precision_that_carries_its_sign() {
+        // Codex P2 on PR #87: a flat 2dp renders a MACD histogram of 0.0034 as 0.00 and
+        // -0.0021 as "-0.00" — the zero cross the alert keyed on vanishes, and a negative zero
+        // is worse than useless. Built from an EMA over tiny closes so the value is small.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(2);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        List<HABar> window = List.of(
+                barWith("0.0030", "0.0040", "0.0030", "0.0034"), barWith("0.0034", "0.0040", "0.0020", "0.0021"));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, window);
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("SMA(2) = ");
+        // The value (0.00275) must not be flattened to zero.
+        assertThat(user).doesNotContain("SMA(2) = 0.00 ");
+        assertThat(user).doesNotContain("SMA(2) = 0.00\n");
+        assertThat(user).doesNotContain("-0.00");
+    }
+
+    @Test
+    void values_that_no_fixed_scale_can_separate_are_printed_exactly() {
+        // Codex P2 on PR #87, second finding on this formatter: the bounded search returned
+        // MAX_SCALE unconditionally when the whole range failed, so values differing only past
+        // 8 dp still collapsed — 0.000000004 vs -0.000000004 both became 0.00000000, erasing a
+        // MACD crossing exactly as the flat 2dp had. Raising the cap only moves that boundary,
+        // so exhaustion now means "do not shorten at all".
+        //
+        // This is the boundary-exhaustion case for the cap, which the first version of the
+        // search never exercised.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(2);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        // SMA(2) over these yields 0.0000000035 then 0.0000000025 — distinct, but identical at
+        // every scale from 2 to 8.
+        List<HABar> window = List.of(
+                barWith("0.000000003", "0.000000004", "0.000000003", "0.000000004"),
+                barWith("0.000000004", "0.000000004", "0.000000003", "0.000000003"),
+                barWith("0.000000003", "0.000000003", "0.000000002", "0.000000002"));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, window);
+
+        String user = capturedUserText(client);
+        String indicator =
+                user.lines().filter(l -> l.contains("SMA(2) = ")).findFirst().orElseThrow();
+        // Neither flattened to zero, and the two path points stayed distinct. Note the negative
+        // assertion has to name the collapsed *path* — doesNotContain("0.00000000") would fail
+        // against the correct output, because "0.0000000025" contains that substring.
+        assertThat(indicator).contains("0.0000000035").contains("0.0000000025");
+        assertThat(indicator).doesNotContain("[0.00000000,");
+    }
+
+    @Test
+    void bar_rows_are_printed_at_two_decimals() {
+        // The live note wrote "ha_close ... roughly 52.2 on 30 June" against a row reading
+        // ha_open 51.79760900267785 / ha_high 52 / ha_low 50.9 / ha_close 51.385 — right row,
+        // drifted digits, wrong measure. Full-precision BigDecimals are hostile to a model
+        // reproducing them in prose, so the printed form is rounded.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, List.of(barWith("51.79760900267785", "52", "50.9", "51.385")));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("51.80");
+        assertThat(user).doesNotContain("51.79760900267785");
+    }
+
+    @Test
+    void indicator_values_are_rounded_for_display_but_computed_at_full_precision() {
+        // Rounding is display-only: an SMA of 55.0830 must print as 55.08, and the value must
+        // come from the unrounded closes — rounding the inputs would shift the result.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+        ChartConfig config = chartConfig();
+        config.setSmaPeriod(2);
+        config.setEmaPeriod(0);
+        config.setShowRsi(false);
+        // Two closes averaging 55.0830 exactly, neither of which is 2dp-representable.
+        List<HABar> window = List.of(barWith("50", "56", "50", "55.005"), barWith("55.005", "56", "55.005", "55.161"));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(config))
+                .analyze(EVENT, window);
+
+        // Strict: "55.083".contains("55.08") is true, so the substring alone would pass
+        // vacuously against an unrounded value. Assert the unrounded form is absent too.
+        String user = capturedUserText(client);
+        assertThat(user).contains("SMA(2) = 55.08");
+        assertThat(user).doesNotContain("55.083");
+    }
+
+    @Test
+    void the_context_states_the_window_anchors_the_note_would_otherwise_derive() {
+        // The figures the live note derived by hand — window start, the trough with its date,
+        // the rally off it — are exactly the ones that went wrong. Pre-compute them instead.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, haBars(30));
+
+        String user = capturedUserText(client);
+        assertThat(user).contains("Window anchors");
+        assertThat(user).contains("lowest ha_close");
+        assertThat(user).contains("highest ha_close");
+        // haBars() ramps 101..130, so the low is the first bar and the high is the alert bar.
+        assertThat(user).contains("101.00");
+        assertThat(user).contains("130.00");
+    }
+
+    @Test
+    void system_prompt_requires_a_quoted_bar_value_to_name_its_measure() {
+        // The live note quoted 48.41 and 48.08 for the same day without saying one was the
+        // close and the other the low, which reads as a contradiction though both were right.
+        BedrockRuntimeClient client = Mockito.mock(BedrockRuntimeClient.class);
+        new ScriptedClient(client).next(endTurnWithText(ANALYSIS_JSON));
+
+        new BedrockAiAnalyst(client, configWithCap(8), new InMemoryMarketDataProvider(), context(chartConfig()))
+                .analyze(EVENT, haBars(30));
+
+        ArgumentCaptor<ConverseRequest> captor = ArgumentCaptor.forClass(ConverseRequest.class);
+        verify(client, atLeastOnce()).converse(captor.capture());
+        String system = captor.getAllValues().get(0).system().get(0).text();
+        assertThat(system).containsIgnoringCase("name the measure");
+    }
+
     @Test
     void the_triggering_bar_is_restored_when_retention_removed_it() {
         // Codex P2: under SNAPSHOT_ONLY a retried alert's HA bar may be gone. The chart
@@ -368,6 +529,10 @@ class BedrockAiAnalystTest {
         assertThat(user).contains("raw OHLC bars");
         assertThat(user).contains("bar_time  open  high  low  close");
         assertThat(user).doesNotContain("ha_close");
+        // Part A.2 anchors reach this flow too, labelled with the raw measure — the "ha_close"
+        // exclusion above would catch an anchor block that leaked the HA label in here.
+        assertThat(user).contains("Window anchors");
+        assertThat(user).contains("lowest close = ");
     }
 
     @Test
@@ -504,6 +669,19 @@ class BedrockAiAnalystTest {
      */
     private static TechnicalContextBuilder context(ChartConfig config) {
         return new TechnicalContextBuilder(config);
+    }
+
+    /** A single HA bar at the event bar time, for precision assertions. */
+    private static HABar barWith(String open, String high, String low, String close) {
+        return new HABar(
+                EVENT.instrumentId(),
+                EVENT.timeframe(),
+                EVENT.barTime(),
+                new BigDecimal(open),
+                new BigDecimal(high),
+                new BigDecimal(low),
+                new BigDecimal(close),
+                EVENT.detectedAt());
     }
 
     /**
