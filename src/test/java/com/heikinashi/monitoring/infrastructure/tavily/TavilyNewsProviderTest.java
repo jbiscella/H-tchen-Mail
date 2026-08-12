@@ -85,6 +85,26 @@ class TavilyNewsProviderTest {
     }
 
     @Test
+    void the_headline_source_is_the_publisher_not_the_search_provider() {
+        // Codex P2 on PR #88: ToolCatalog hands NewsHeadline.source() straight to the analyst, so
+        // a literal "tavily" told the model that Reuters and the FT were published by a search
+        // API. Marketaux passes the article's source and EODHD derives the link host; match them.
+        String json = """
+                {"results":[{"title":"A","url":"https://www.reuters.com/x","published_date":"Wed, 05 Aug 2026 11:00:00 GMT"},
+                {"title":"B","url":"https://ft.com/y","published_date":"Wed, 05 Aug 2026 11:00:00 GMT"}]}""";
+
+        List<NewsHeadline> out = TavilyNewsProvider.parseNews(json, 5);
+
+        assertThat(out).extracting(NewsHeadline::source).containsExactly("reuters.com", "ft.com");
+    }
+
+    @Test
+    void a_url_with_no_parseable_host_falls_back_to_the_adapter_name() {
+        // Better a known-wrong-but-present attribution than an empty one.
+        assertThat(TavilyNewsProvider.publisherOf("not a url")).isEqualTo("tavily");
+    }
+
+    @Test
     void an_item_with_an_unparseable_date_is_dropped_not_defaulted() {
         // Defaulting would let an undated item pass the recency window, which is precisely the
         // stale-news failure Block 18 Part B removed.

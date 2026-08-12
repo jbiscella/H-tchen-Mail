@@ -198,12 +198,35 @@ public class TavilyNewsProvider implements NewsProvider {
                         .toInstant()
                         .truncatedTo(ChronoUnit.SECONDS);
                 String content = text(item, "content");
-                out.add(new NewsHeadline(title, at, PROVIDER, url, content == null ? "" : content));
+                // The PUBLISHER, not this adapter's name. ToolCatalog hands NewsHeadline.source()
+                // straight to the analyst, and Marketaux passes the article's source while EODHD
+                // derives the link host — so a literal "tavily" would have told the model that
+                // Reuters and the FT were both published by a search API (Codex P2 on PR #88).
+                // It also matters for attribution: the note should credit whoever wrote the story.
+                out.add(new NewsHeadline(title, at, publisherOf(url), url, content == null ? "" : content));
             } catch (RuntimeException e) {
                 LOG.debug("tavily_skipping_item reason=unparsable_published_date value={}", published);
             }
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * The publisher, derived from the result URL's host with any leading {@code www.} dropped —
+     * mirroring {@code EodhdNewsProvider.hostOf}, which solves the same problem for a provider
+     * that supplies no source field. Falls back to the adapter name only when the URL has no
+     * parseable host, which is preferable to an empty attribution.
+     */
+    static String publisherOf(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            if (host == null || host.isBlank()) {
+                return PROVIDER;
+            }
+            return host.startsWith("www.") ? host.substring(4) : host;
+        } catch (IllegalArgumentException e) {
+            return PROVIDER;
+        }
     }
 
     private static String text(JsonNode node, String field) {

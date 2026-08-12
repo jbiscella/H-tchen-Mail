@@ -48,6 +48,12 @@ monitoring:
       - marketaux
       - yahoo-rss
       - eodhd
+      # Block 19. This list is what the deployed app binds; the NewsConfig field
+      # initializer is only a fallback for contexts without this YAML, so omitting
+      # tavily here would have left the provider dead in production even with a key
+      # set (Codex P1 on PR #88). Safe unconditionally: the adapter disables itself
+      # when monitoring.tavily.api-key is empty.
+      - tavily
   ingest:
     circuit-breaker:
       threshold: 3
