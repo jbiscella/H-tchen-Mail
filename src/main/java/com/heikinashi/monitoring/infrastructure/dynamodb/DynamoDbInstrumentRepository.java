@@ -106,6 +106,20 @@ public class DynamoDbInstrumentRepository implements InstrumentRepository {
     }
 
     @Override
+    public Optional<Instrument> findByTickerAndExchange(String ticker, String exchange) {
+        GetItemResponse lock = client.getItem(GetItemRequest.builder()
+                .tableName(tableConfig.getTableName())
+                .key(Map.of("pk", s(Keys.tickerLockPk(exchange, ticker)), "sk", s(Keys.SK_LOCK)))
+                .consistentRead(true)
+                .build());
+        if (!lock.hasItem() || lock.item().isEmpty()) {
+            return Optional.empty();
+        }
+        AttributeValue id = lock.item().get("instrument_id");
+        return id == null ? Optional.empty() : findById(id.s());
+    }
+
+    @Override
     public Page<Instrument> listByStatus(InstrumentStatus status, int pageSize, Optional<String> cursor) {
         QueryRequest.Builder query = QueryRequest.builder()
                 .tableName(tableConfig.getTableName())
@@ -359,6 +373,9 @@ public class DynamoDbInstrumentRepository implements InstrumentRepository {
         }
         item.put("enable_chart", AttributeValue.fromBool(cfg.enableChart()));
         item.put("enable_ai_analysis", AttributeValue.fromBool(cfg.enableAiAnalysis()));
+        // Block 19: written only when set, so a config without an override carries no
+        // attribute at all and reads back as absent.
+        cfg.newsQuery().ifPresent(q -> item.put("news_query", s(q)));
         item.put("created_at", s(cfg.createdAt().toString()));
         item.put("updated_at", s(cfg.updatedAt().toString()));
         return item;
@@ -436,6 +453,9 @@ public class DynamoDbInstrumentRepository implements InstrumentRepository {
                 recipients,
                 item.get("enable_chart").bool(),
                 item.get("enable_ai_analysis").bool(),
+                // Block 19. Absent for every config stored before this field existed, which is
+                // the correct reading: no override, derive the query from the instrument name.
+                Optional.ofNullable(item.get("news_query")).map(AttributeValue::s),
                 Instant.parse(item.get("created_at").s()),
                 Instant.parse(item.get("updated_at").s()));
     }

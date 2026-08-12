@@ -53,6 +53,7 @@ resource "aws_lambda_function" "main" {
       MONITORING_EMAIL_SENDER_EMAIL        = var.ses_sender_email
       MONITORING_EODHD_API_KEY             = var.eodhd_api_key
       MONITORING_MARKETAUX_API_KEY         = var.marketaux_api_key
+      MONITORING_TAVILY_API_KEY            = var.tavily_api_key
       MONITORING_MARKETAUX_RECENCY_DAYS_1D = var.marketaux_recency_days_1d
       MONITORING_MARKETAUX_RECENCY_DAYS_1W = var.marketaux_recency_days_1w
       MONITORING_BEDROCK_MODEL_ID          = var.bedrock_model_id
@@ -128,6 +129,7 @@ resource "aws_lambda_function" "retry" {
       MONITORING_EMAIL_SENDER_EMAIL        = var.ses_sender_email
       MONITORING_EODHD_API_KEY             = var.eodhd_api_key
       MONITORING_MARKETAUX_API_KEY         = var.marketaux_api_key
+      MONITORING_TAVILY_API_KEY            = var.tavily_api_key
       MONITORING_MARKETAUX_RECENCY_DAYS_1D = var.marketaux_recency_days_1d
       MONITORING_MARKETAUX_RECENCY_DAYS_1W = var.marketaux_recency_days_1w
       MONITORING_BEDROCK_MODEL_ID          = var.bedrock_model_id
