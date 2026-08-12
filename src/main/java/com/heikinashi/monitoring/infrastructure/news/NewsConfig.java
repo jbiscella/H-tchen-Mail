@@ -24,7 +24,12 @@ import java.util.List;
 @ConfigurationProperties("monitoring.news")
 public class NewsConfig {
 
-    private List<String> providers = List.of("marketaux", "yahoo-rss", "eodhd");
+    /**
+     * Block 19 adds {@code tavily}. It is safe to list unconditionally: the adapter returns no
+     * headlines when {@code monitoring.tavily.api-key} is unset, so a deployment without a key
+     * simply skips it rather than failing.
+     */
+    private List<String> providers = List.of("marketaux", "yahoo-rss", "eodhd", "tavily");
 
     /**
      * How many items each provider is asked for before filtering. Deliberately far

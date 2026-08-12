@@ -28,6 +28,17 @@ public interface InstrumentRepository {
 
     Optional<Instrument> findById(String id);
 
+    /**
+     * Resolve an instrument from the identity a caller has as strings. Needed by Block 19: the
+     * AI tool call carries only {@code ticker} / {@code exchange} (the model supplies them), so
+     * the web-search provider cannot be handed the instrument and must look it up to reach the
+     * name and the {@code news_query} override.
+     *
+     * <p>Backed by the ticker uniqueness lock, which already stores {@code instrument_id}, so
+     * this is two point reads rather than a scan.
+     */
+    Optional<Instrument> findByTickerAndExchange(String ticker, String exchange);
+
     Page<Instrument> listByStatus(InstrumentStatus status, int pageSize, Optional<String> cursor);
 
     void updateMetadata(Instrument updated);

@@ -100,6 +100,13 @@ variable "marketaux_api_key" {
   sensitive   = true
 }
 
+variable "tavily_api_key" {
+  description = "Tavily search API token for the web-search news provider (Block 19). Populated from the TAVILY_KEY GitHub secret via TF_VAR_tavily_api_key. Defaults to empty ON PURPOSE, unlike marketaux_api_key: the adapter disables itself without a key, so a fork or an account with no Tavily signup still deploys and still sends alerts."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "marketaux_recency_days_1d" {
   description = "Marketaux published_after look-back window (days) for daily-timeframe alerts. Override via the MARKETAUX_RECENCY_DAYS_1D GitHub variable."
   type        = number

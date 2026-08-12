@@ -48,6 +48,14 @@ public final class InMemoryInstrumentRepository implements InstrumentRepository 
     }
 
     @Override
+    public Optional<Instrument> findByTickerAndExchange(String ticker, String exchange) {
+        // Resolved through the ticker lock, like the DynamoDB implementation, so a test cannot
+        // pass against a lookup path production does not have.
+        return Optional.ofNullable(locksByTickerKey.get(lockKey(ticker, exchange)))
+                .map(byId::get);
+    }
+
+    @Override
     public Page<Instrument> listByStatus(InstrumentStatus status, int pageSize, Optional<String> cursor) {
         List<Instrument> filtered = new ArrayList<>();
         for (Instrument i : byId.values()) {
