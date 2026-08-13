@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 /**
  * AWS Lambda entry point for {@code monitoring-main} (CLAUDE.md §10).
  *
- * <p>EventBridge sends an empty payload at 22:00 UTC daily. Operators can
+ * <p>EventBridge sends an empty payload at 03:00 UTC daily. Operators can
  * also invoke manually with {@code {"instrument_ids":["abc-123",...]}} to
  * process only the listed instruments. The handler delegates all real work
  * to {@link MonitoringRunService} and returns the structured summary as a

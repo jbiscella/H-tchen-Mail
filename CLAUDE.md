@@ -1969,7 +1969,7 @@ retry_poller_handler(input):
 
 | Function             | Trigger                                  | Memory | Timeout | Concurrency | Purpose                                |
 |----------------------|------------------------------------------|--------|---------|-------------|----------------------------------------|
-| `monitoring-main`    | EventBridge cron `0 22 * * ? *` (daily)  | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
+| `monitoring-main`    | EventBridge cron `0 3 * * ? *` (daily)    | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
 | `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` then `STRATEGY_PENDING_ALERT` items (SI-3c.3) |
 
 Both:
@@ -1982,7 +1982,7 @@ Both:
 ### Daily timeline
 
 ```
-22:00 UTC ─► monitoring-main ──► all active instruments processed sequentially
+03:00 UTC ─► monitoring-main ──► all active instruments processed sequentially
                                   ├── 1d closed bar ingested
                                   ├── 1w bar (if Friday) ingested
                                   ├── HA computed
@@ -2002,7 +2002,7 @@ retry-poller runs unchanged.
 Feature: Scheduling and Orchestration
 
   Scenario: Scheduled daily run, all instruments succeed
-    Given EventBridge fires monitoring-main at 22:00 UTC
+    Given EventBridge fires monitoring-main at 03:00 UTC
     And 10 active instruments exist
     When the handler runs
     Then all 10 are processed in sequence
@@ -2271,7 +2271,25 @@ CLI uses AWS SDK v2 directly against DynamoDB / Lambda. No HTTP API.
 
 | Resource                          | Configuration                                                       |
 |-----------------------------------|---------------------------------------------------------------------|
-| Rule `monitoring-daily`           | `cron(0 22 * * ? *)`. Target: `monitoring-main:live`.                |
+| Rule `monitoring-daily`           | `cron(0 3 * * ? *)` — after EODHD's nightly EOD batch (see below). Target: `monitoring-main:live`. |
+
+**Why 03:00 UTC and not the evening.** The schedule was `cron(0 22 * * ? *)` and had
+been running a day behind without appearing to. Measured 2026-08-12/13: at 22:00 the
+12 Aug bars did not exist at EODHD, so `bars_inserted=0` and — because detection only
+runs over newly-inserted bars — no pattern was evaluated and no email was sent. By
+00:35 UTC all four instruments carried them. Evenings that *did* alert were ingesting
+the **previous** day's still-unclaimed bars, which is indistinguishable from working.
+
+The floor is the last close plus publication lag: NVDA closes 20:00 UTC (21:00 in
+winter) and the observed batch lands between 22:00 and 00:35. 03:00 leaves 2.5-5h of
+margin and absorbs the winter shift.
+
+It also serves every other main market, because EODHD publishes **one nightly batch
+across exchanges** rather than per-exchange at each close — verified at 00:45 UTC that
+`0005.HK`, `BHP.AU`, `SAP.XETRA` and `NVDA.US` all already carried their 12 Aug bar.
+Known limitation, and a vendor one rather than a scheduling one: Tokyo and Sydney open
+at 00:00 UTC, before that batch lands, so an Asia-Pacific daily alert can only arrive
+during the next session. Intraday data would be required to change that.
 | Rule `monitoring-retry-poller`    | `cron(0/15 * * * ? *)`. Target: `retry-poller:live`.                  |
 
 #### SES
@@ -2371,7 +2389,7 @@ Auth: OIDC federation, no static keys.
 | 9  | First push to `main` → workflow applies Terraform + deploys Lambdas    |
 | 10 | Test invocation: `aws lambda invoke --function-name monitoring-main --payload '{}' /dev/null` |
 | 11 | Insert first instrument via CLI script                                 |
-| 12 | Wait for cron 22:00 UTC or invoke manually                             |
+| 12 | Wait for cron 03:00 UTC or invoke manually                             |
 
 ---
 
