@@ -305,7 +305,7 @@ should receive up to `N × tracked_timeframes` emails (one per
 (instrument, timeframe) combination that has at least one persisted
 HA bar). Combinations with no HA bar yet are silently skipped.
 
-Wait for the 22:00 UTC cron — or invoke manually — and check:
+Wait for the 03:00 UTC cron — or invoke manually — and check:
 
 - **CloudWatch Logs** `/aws/lambda/monitoring-main` — the JSON summary
   line `main_run_summary` reports `duration_ms`, `processed`, `sent`,
@@ -463,7 +463,7 @@ aws dynamodb query \
   --expression-attribute-names '{"#s":"status"}'
 ```
 
-The next 22:00 UTC cron will pick it up, or trigger it manually:
+The next 03:00 UTC cron will pick it up, or trigger it manually:
 
 ```bash
 aws lambda invoke \
