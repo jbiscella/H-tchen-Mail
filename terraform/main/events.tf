@@ -1,6 +1,7 @@
 # --- EventBridge schedules -------------------------------------------------
-# Daily run of monitoring-main at 22:00 UTC (after US market close + EU
-# 1d/1w bars closed) and a 15-minute drumbeat for retry-poller. Both target
+# Daily run of monitoring-main at 03:00 UTC (after EODHD's nightly EOD batch —
+# see the rule below for the measurement) and a 15-minute drumbeat for
+# retry-poller. Both target
 # the function's `live` alias so a deploy that misbehaves can be rolled back
 # by just repointing the alias — no schedule change needed.
 

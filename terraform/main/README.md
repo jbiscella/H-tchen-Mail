@@ -6,7 +6,7 @@ Owns every AWS resource the monitoring service needs at runtime:
 |---------------|--------------------------------------------------------------------------|
 | `dynamodb.tf` | `monitoring` table + `gsi_status` + `gsi_retry_due`, TTL on `ttl`, PITR  |
 | `lambda.tf`   | `monitoring-main` + `retry-poller` (SnapStart, arm64) + `live` aliases   |
-| `events.tf`   | EventBridge daily 22:00 UTC rule + 15-min retry-poller rule + targets    |
+| `events.tf`   | EventBridge daily 03:00 UTC rule + 15-min retry-poller rule + targets    |
 | `iam.tf`      | Per-Lambda execution roles sharing one inline policy                     |
 | `sns.tf`      | DLQ topic + ops-alerts topic                                             |
 | `s3.tf`       | `monitoring-artifacts` bucket (Lambda jars; CI uploads here)             |
@@ -89,7 +89,7 @@ CLAUDE.md §14:
 ## Ops notes
 
 - `MainNotRunning` deliberately uses a 26-hour evaluation period — the
-  daily cron runs at 22:00 UTC, so 26h gives ~2h of grace before alerting.
+  daily cron runs at 03:00 UTC, so 26h gives ~2h of grace before alerting.
 - `lambda:InvokeFunction` permissions are pinned to the `live` alias
   qualifier; an unpublished `$LATEST` will not be schedulable.
 - SSM parameter `value`s are `ignore_changes = [value]` so operators can

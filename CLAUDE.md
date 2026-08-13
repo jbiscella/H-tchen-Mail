@@ -1969,7 +1969,7 @@ retry_poller_handler(input):
 
 | Function             | Trigger                                  | Memory | Timeout | Concurrency | Purpose                                |
 |----------------------|------------------------------------------|--------|---------|-------------|----------------------------------------|
-| `monitoring-main`    | EventBridge cron `0 22 * * ? *` (daily)  | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
+| `monitoring-main`    | EventBridge cron `0 3 * * ? *` (daily)    | 1024 MB| 900 s   | reserved=1  | ingest → HA → detect → dispatch         |
 | `retry-poller`       | EventBridge cron `*/15 * * * ? *`        | 1024 MB| 300 s   | reserved=1  | process due `PENDING_ALERT` then `STRATEGY_PENDING_ALERT` items (SI-3c.3) |
 
 Both:
